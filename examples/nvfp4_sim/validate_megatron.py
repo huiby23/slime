@@ -44,6 +44,7 @@ def main():
                 bf16=True,
                 params_dtype=torch.bfloat16,
                 normalization="RMSNorm",
+                qk_layernorm=True,
                 add_bias_linear=False,
                 gated_linear_unit=True,
                 activation_func=F.silu,
@@ -108,12 +109,18 @@ def main():
             args.output.mkdir(parents=True, exist_ok=True)
             checkpoint = args.output / "checkpoint.pt"
             torch.save(
-                {"model": model.state_dict(), "optimizer": optimizer.state_dict(), "rng": torch.cuda.get_rng_state()},
+                {
+                    "model": model.state_dict(),
+                    # Distributed optimizer state_dict contains metadata, not
+                    # the separate distributed parameter/moment checkpoint.
+                    "optimizer_metadata": optimizer.state_dict(),
+                    "rng": torch.cuda.get_rng_state(),
+                },
                 checkpoint,
             )
             restored = torch.load(checkpoint, map_location="cpu", weights_only=False)
             model.load_state_dict(restored["model"])
-            optimizer.load_state_dict(restored["optimizer"])
+            optimizer.load_state_dict(restored["optimizer_metadata"])
             torch.cuda.set_rng_state(restored["rng"])
             report = {
                 "passed": True,
@@ -123,7 +130,8 @@ def main():
                 "recipe_counters": dict(recipe.counters),
                 "steps": steps,
                 "weights_changed": True,
-                "checkpoint_round_trip": True,
+                "model_checkpoint_round_trip": True,
+                "optimizer_metadata_round_trip": True,
                 "checkpoint": str(checkpoint),
             }
             (args.output / "validation.json").write_text(json.dumps(report, indent=2) + "\n")

@@ -220,3 +220,51 @@ def test_sglang_tied_head_keeps_embedding_lookup():
     torch.testing.assert_close(
         method.apply(layer, x), nvfp4_linear(x, layer.weight, recipe=NVFP4Recipe()), rtol=0, atol=0
     )
+
+
+def test_sglang_constructor_covers_tied_lm_head_alias(monkeypatch):
+    pytest.importorskip("sglang")
+    from sglang.srt.layers.quantization.unquant import UnquantizedEmbeddingMethod, UnquantizedLinearMethod
+
+    from slime_plugins.nvfp4_sim.sglang_models import qwen3
+
+    # Exercise the real adapter constructor over a CPU model skeleton, without
+    # initializing SGLang's CUDA attention backend or a distributed scheduler.
+    def base_init(self, config):
+        torch.nn.Module.__init__(self)
+        self.pp_group = SimpleNamespace(world_size=1)
+        self.quant_config = None
+        self.model = torch.nn.Module()
+        self.model.embed_tokens = torch.nn.Embedding(48, 32, dtype=torch.bfloat16)
+        self.model.embed_tokens.quant_method = UnquantizedEmbeddingMethod()
+        layers = []
+        for _ in range(config.num_hidden_layers):
+            layer = torch.nn.Module()
+            layer.self_attn = torch.nn.Module()
+            layer.mlp = torch.nn.Module()
+            for owner, name in (
+                (layer.self_attn, "qkv_proj"),
+                (layer.self_attn, "o_proj"),
+                (layer.mlp, "gate_up_proj"),
+                (layer.mlp, "down_proj"),
+            ):
+                projection = torch.nn.Linear(32, 32, bias=False, dtype=torch.bfloat16)
+                projection.quant_method = UnquantizedLinearMethod()
+                setattr(owner, name, projection)
+            layers.append(layer)
+        self.model.layers = torch.nn.ModuleList(layers)
+        self.lm_head = self.model.embed_tokens
+
+    monkeypatch.setattr(qwen3.Qwen3ForCausalLM, "__init__", base_init)
+    monkeypatch.setattr(qwen3, "get_tensor_model_parallel_world_size", lambda: 1)
+    model = qwen3.NVFP4SimQwen3ForCausalLM(SimpleNamespace(num_hidden_layers=2))
+    assert len(model._nvfp4_modules) == 9 and "lm_head" in model._nvfp4_modules
+    assert model.lm_head is model.model.embed_tokens
+    assert isinstance(model.lm_head.quant_method, qwen3.NVFP4SimEmbeddingLinearMethod)
+    indices = torch.tensor([0, 7, 12])
+    torch.testing.assert_close(
+        model.model.embed_tokens.quant_method.embedding(model.model.embed_tokens, indices),
+        model.lm_head.weight[indices],
+        rtol=0,
+        atol=0,
+    )

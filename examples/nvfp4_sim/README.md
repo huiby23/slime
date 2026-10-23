@@ -43,7 +43,9 @@ This does not establish bitwise equivalence or Blackwell speed/memory savings.
 - `slime_plugins/nvfp4_sim/sglang_models/qwen3.py`: matching rollout simulation.
 - `prepare_baseline.py`: prepare an inspectable baseline-derived run and optional CPU preflight/launch.
 - `validate_megatron.py`: CUDA integration check using real Megatron, TE,
-  distributed optimizer, two updates, and a checkpoint round-trip.
+  distributed optimizer, two updates, a model checkpoint round-trip and optimizer
+  metadata restoration. This small check does not serialize the distributed
+  optimizer's separate FP32 parameter/moment checkpoint.
 
 ## Use the original baseline
 
@@ -112,8 +114,18 @@ forward/backward. These are not native CUDA integration checks.
 
 The separate `validate_megatron.py --output <directory>` must run in the baseline
 runtime on an exclusively available CUDA GPU. It writes `validation.json` and a
-model/optimizer checkpoint. CUDA/end-to-end GRPO validation remains pending until
-an idle GPU is available; CPU checks do not establish A100 training convergence.
+checkpoint. On A100, the two-layer integration check completed two nonzero-gradient
+optimizer updates and a model checkpoint round-trip; all seven recipe counters
+were 18 (FPROP, DGRAD, WGRAD, both RHT operands, both stochastic gradient casts).
+This validates CUDA execution with real Megatron/TE and a distributed optimizer.
+
+The full Qwen3-0.6B GRPO smoke passed CPU configuration preflight and started on
+GPU 7. A different user's process then claimed the same GPU, so our container was
+stopped during startup, before its first update. Full-model rollout/training/weight-sync
+and convergence validation remain pending; the small CUDA check is not an accuracy
+experiment. Availability checks do not reserve a device against other users.
+Artifacts from this checkout are under `outputs/nvfp4-cuda-validation`,
+`outputs/nvfp4-sim-preflight`, and `outputs/nvfp4-sim-smoke-a100`.
 
 References: [NVIDIA NVFP4 recipe documentation](https://docs.nvidia.com/deeplearning/transformer-engine/features/low_precision_training/nvfp4/nvfp4.html),
 [recipe API](https://docs.nvidia.com/deeplearning/transformer-engine/api/common.html),
