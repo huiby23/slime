@@ -82,6 +82,33 @@ directory after an actual run. For a baseline-sized experiment, omit
 `--quick-smoke` and set `--updates 100`; the original rollout/evaluation settings
 are retained. Checkpoint interval is one update.
 
+To validate actual GRPO learning signals, use the two-update training smoke:
+
+```bash
+python3 examples/nvfp4_sim/prepare_baseline.py \
+  --output outputs/nvfp4-training-preflight --training-smoke --preflight
+```
+
+This keeps the baseline's 8 prompts x 8 answers, 1024-token training/eval response
+limits, and batch size 64. Only the number of updates and evaluation questions
+are reduced to two and eight; evaluation/save intervals are one. The two-hour
+wall-time limit accommodates software simulation. No reward shaping, extra loss
+term, or sampling filter is introduced.
+
+The original supervisor runs unchanged through `run_validated.py`. A passive
+before-step hook writes `optimizer-validation.jsonl`: it observes an entire FP32
+optimizer master tensor before/after each real optimizer call, one projection's
+FP32 main gradient, the global gradient norm, and all seven recipe counters. It
+does not change the optimizer's inputs, RNG, gradients, or return value.
+
+`training-validation.json` requires both updates to have mixed-reward prompt
+groups, finite nonzero global/projection gradients, an FP32 master change, and
+execution of FPROP/DGRAD/WGRAD, both RHT operands and stochastic gradient casts.
+It also requires both checkpoints, completed weight synchronizations and an
+evaluation. `successful_training` is false if this evidence is missing, even if
+the original supervisor reports a clean exit. A passing smoke is integration
+evidence, not a convergence or accuracy result.
+
 For manual integration, set:
 
 ```text
@@ -97,7 +124,7 @@ SGLang child processes must inherit the package path and external model setting.
 
 ## Wait for an idle GPU
 
-After preparing a two-update quick smoke with `--preflight`, run the host-only
+After preparing a two-update smoke with `--preflight`, run the host-only
 watcher in a persistent background process:
 
 ```bash
@@ -150,11 +177,14 @@ optimizer updates and a model checkpoint round-trip; all seven recipe counters
 were 18 (FPROP, DGRAD, WGRAD, both RHT operands, both stochastic gradient casts).
 This validates CUDA execution with real Megatron/TE and a distributed optimizer.
 
-The full Qwen3-0.6B GRPO smoke passed CPU configuration preflight and started on
-GPU 7. A different user's process then claimed the same GPU, so our container was
-stopped during startup, before its first update. Full-model rollout/training/weight-sync
-and convergence validation remain pending; the small CUDA check is not an accuracy
-experiment. Availability checks do not reserve a device against other users.
+The first full Qwen3-0.6B attempt stopped during startup after another user
+claimed the same GPU. A subsequent automatically scheduled quick smoke on GPU 7
+completed both steps, generation, weight synchronization, evaluation and checkpoint
+saves, then released the GPU. All its 64-token responses were truncated and all
+rewards/gradients were zero. This proves process connectivity, not active learning.
+The stronger training smoke above addresses this validation gap. Convergence
+validation remains pending. Availability checks do not reserve a GPU against
+other users.
 Artifacts from this checkout are under `outputs/nvfp4-cuda-validation`,
 `outputs/nvfp4-sim-preflight`, and `outputs/nvfp4-sim-smoke-a100`.
 

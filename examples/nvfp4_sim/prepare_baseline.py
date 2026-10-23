@@ -54,8 +54,14 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--gpu", type=int, default=7)
     parser.add_argument("--updates", type=int, default=2)
-    parser.add_argument(
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--quick-smoke", action="store_true", help="2 prompts x 2 responses, 64 generated tokens, 8 eval questions"
+    )
+    mode.add_argument(
+        "--training-smoke",
+        action="store_true",
+        help="Two baseline-sized training updates, eight eval questions, require learning-signal validation",
     )
     parser.add_argument("--run", action="store_true", help="Run after checking that the selected GPU is idle")
     parser.add_argument(
@@ -64,6 +70,8 @@ def main():
     args = parser.parse_args()
     if args.updates < 1:
         parser.error("--updates must be positive")
+    if args.training_smoke and args.updates != 2:
+        parser.error("--training-smoke requires --updates 2")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     if (output / "results/status.json").exists():
@@ -104,6 +112,23 @@ def main():
     custom_config.update(nvfp4_sim_chunk_blocks=8, nvfp4_sim_include_output_layer=True)
     (output / "mismatch.yaml").write_text(json.dumps(custom_config, indent=2) + "\n")
     replace_option(command, "--custom-config-path", "/nvfp4-run/mismatch.yaml")
+    if args.training_smoke:
+        assert baseline["training"]["response_token_limit"] == 1024
+        assert baseline["training"]["samples_per_prompt"] == 8
+        assert baseline["training"]["global_batch_size"] == 64
+        replace_option(
+            command, "--custom-megatron-before-train-step-hook-path", "nvfp4_sim.training_validation.before_train_step"
+        )
+        config["require_training_validation"] = True
+        config["wall_time_limit_seconds"] = 7200
+        config["training"]["validation_mode"] = "nonzero-gradient-fp32-master-update"
+    if args.quick_smoke or args.training_smoke:
+        replace_option(command, "--eval-interval", 1)
+        index = command.index("--eval-prompt-data") + 2
+        validation = Path(command[index].replace("/experiment", str(ASSETS), 1)).read_text().splitlines()[:8]
+        (output / "validation.jsonl").write_text("\n".join(validation) + "\n")
+        command[index] = "/nvfp4-run/validation.jsonl"
+        config["training"].update(validation_questions=8, eval_every_updates=1)
     if args.quick_smoke:
         for option, value in (
             ("--rollout-batch-size", 2),
@@ -111,13 +136,8 @@ def main():
             ("--global-batch-size", 4),
             ("--rollout-max-response-len", 64),
             ("--eval-max-response-len", 64),
-            ("--eval-interval", 1),
         ):
             replace_option(command, option, value)
-        index = command.index("--eval-prompt-data") + 2
-        validation = Path(command[index].replace("/experiment", str(ASSETS), 1)).read_text().splitlines()[:8]
-        (output / "validation.jsonl").write_text("\n".join(validation) + "\n")
-        command[index] = "/nvfp4-run/validation.jsonl"
         config["training"].update(
             prompts_per_update=2,
             samples_per_prompt=2,
@@ -139,6 +159,10 @@ def main():
     env["CUDA_VISIBLE_DEVICES"] = "0"
     for name in ("results/logs", "cache", "tmp/sg-a"):
         (output / name).mkdir(parents=True, exist_ok=True)
+    for key in ("XDG_CACHE_HOME", "TORCHINDUCTOR_CACHE_DIR", "TRITON_CACHE_DIR", "CUDA_CACHE_PATH"):
+        if key in env and env[key].startswith("/nvfp4-run/"):
+            (output / env[key][len("/nvfp4-run/") :]).mkdir(parents=True, exist_ok=True)
+    (output / "cache/xdg/torch/kernels").mkdir(parents=True, exist_ok=True)
     (output / "config.json").write_text(json.dumps(config, indent=2) + "\n")
     docker = [
         "docker",
@@ -171,7 +195,11 @@ def main():
             "--entrypoint",
             "python3",
             config["image_id"],
-            "/study/scripts/run_online_training.py",
+            (
+                "/quant/examples/nvfp4_sim/run_validated.py"
+                if args.training_smoke
+                else "/study/scripts/run_online_training.py"
+            ),
             "/nvfp4-run/config.json",
         )
     )

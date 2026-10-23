@@ -24,6 +24,16 @@ def main():
     assert callable(load_function(args.custom_model_provider_path))
     assert args.nvfp4_sim_include_output_layer and args.nvfp4_sim_chunk_blocks > 0
     assert args.num_rollout == config["training"]["updates"]
+    assert args.rollout_max_response_len == config["training"]["response_token_limit"]
+    assert args.rollout_batch_size == config["training"]["prompts_per_update"]
+    assert args.n_samples_per_prompt == config["training"]["samples_per_prompt"]
+    assert args.global_batch_size == config["training"]["global_batch_size"]
+    if config.get("require_training_validation"):
+        assert args.rollout_max_response_len == args.eval_max_response_len == 1024
+        assert args.n_samples_per_prompt == args.rollout_batch_size == 8
+        assert args.global_batch_size == 64 and args.num_rollout == 2
+        assert args.custom_megatron_before_train_step_hook_path == "nvfp4_sim.training_validation.before_train_step"
+        assert callable(load_function(args.custom_megatron_before_train_step_hook_path))
     assert args.use_tis == config["training"]["importance_correction"]
     assert args.sglang_disable_decode_cuda_graph and args.sglang_disable_prefill_cuda_graph
     assert args.tensor_model_parallel_size == args.pipeline_model_parallel_size == args.context_parallel_size == 1
@@ -43,6 +53,11 @@ def main():
         "include_output_layer": args.nvfp4_sim_include_output_layer,
         "updates": args.num_rollout,
         "use_tis": args.use_tis,
+        "require_training_validation": config.get("require_training_validation", False),
+        "response_token_limit": args.rollout_max_response_len,
+        "prompts_per_update": args.rollout_batch_size,
+        "samples_per_prompt": args.n_samples_per_prompt,
+        "global_batch_size": args.global_batch_size,
         "cpu_only": True,
     }
     (root / "configuration-check.json").write_text(json.dumps(report, indent=2) + "\n")

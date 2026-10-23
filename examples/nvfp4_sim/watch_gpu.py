@@ -108,12 +108,17 @@ def prepare_attempt(template, directory, gpu, name, watch_id, simulator_commit):
         physical_gpus=[gpu["index"]],
         assigned_gpu_uuids=[gpu["uuid"]],
         gpu_allocation_managed_by_sequence=False,
-        wall_time_limit_seconds=1800,
+        wall_time_limit_seconds=config.get("wall_time_limit_seconds", 1800),
     )
     for filename in ("mismatch.yaml", "validation.jsonl", "configuration-check.json"):
         (directory / filename).write_bytes((template / filename).read_bytes())
     for relative in ("results/logs", "cache", "tmp/sg-a"):
         (directory / relative).mkdir(parents=True, exist_ok=True)
+    for key in ("XDG_CACHE_HOME", "TORCHINDUCTOR_CACHE_DIR", "TRITON_CACHE_DIR", "CUDA_CACHE_PATH"):
+        value = config.get("environment", {}).get(key, "")
+        if value.startswith("/nvfp4-run/"):
+            (directory / value[len("/nvfp4-run/") :]).mkdir(parents=True, exist_ok=True)
+    (directory / "cache/xdg/torch/kernels").mkdir(parents=True, exist_ok=True)
     save(directory / "config.json", config)
     docker = copy.deepcopy(manifest["docker_command"])
     docker[docker.index("--gpus") + 1] = "device=" + gpu["uuid"]
@@ -282,6 +287,13 @@ def main():
                         success = (
                             code == 0 and result.get("successful_training") and result.get("completed_updates") == 2
                         )
+                        if json.loads((active_dir / "config.json").read_text()).get("require_training_validation"):
+                            report_path = active_dir / "results/training-validation.json"
+                            validation = (
+                                json.loads(report_path.read_text()) if report_path.exists() else {"passed": False}
+                            )
+                            state["training_validation"] = validation
+                            success = success and validation["passed"]
                         state.update(state="completed" if success else "failed", finished_at=stamp(), exit_code=code)
                         state["attempts"][-1]["outcome"] = state["state"]
                         event(state["state"], exit_code=code, completed_updates=result.get("completed_updates", 0))

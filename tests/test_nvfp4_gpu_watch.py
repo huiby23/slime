@@ -65,7 +65,12 @@ class GPUWatchTests(unittest.TestCase):
             root = Path(temporary)
             template = root / "template"
             template.mkdir()
-            config = {"training": {"updates": 2}, "container_run_dir": "/nvfp4-run/results"}
+            config = {
+                "training": {"updates": 2},
+                "container_run_dir": "/nvfp4-run/results",
+                "wall_time_limit_seconds": 7200,
+                "environment": {"TORCHINDUCTOR_CACHE_DIR": "/nvfp4-run/cache/torchinductor"},
+            }
             original = {
                 "simulator_commit": "old-commit",
                 "docker_command": [
@@ -99,6 +104,8 @@ class GPUWatchTests(unittest.TestCase):
             self.assertEqual(prepared["training"]["updates"], 2)
             self.assertFalse(prepared["gpu_allocation_managed_by_sequence"])
             self.assertTrue((directory / "results/logs").is_dir())
+            self.assertEqual(prepared["wall_time_limit_seconds"], 7200)
+            self.assertTrue((directory / "cache/torchinductor").is_dir())
             with self.assertRaises(AssertionError):
                 watch.prepare_attempt(template, directory, gpu, "our-container", "our-watch", "new-commit")
 
