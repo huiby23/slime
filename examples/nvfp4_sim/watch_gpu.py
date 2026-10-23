@@ -1,4 +1,4 @@
-"""Wait for >5 minutes of observed GPU idleness, then run the prepared NVFP4 smoke.
+"""Wait for >5 minutes of observed GPU idleness, then run the prepared NVFP4 experiment.
 
 Standard-library-only host process. Persistent state/logs live in --output.
 Each retry gets a fresh directory. Stop only containers carrying our watch label;
@@ -20,6 +20,15 @@ from pathlib import Path
 
 LOCAL_TIMEZONE = timezone(timedelta(hours=8))
 LABEL = "lab.nvfp4-watch"
+VALIDATION_CHECKS = (
+    "runtime_completed",
+    "training_metrics_complete_and_finite",
+    "two_active_optimizer_updates",
+    "checkpoints_present",
+    "weight_syncs_completed",
+    "final_evaluation_completed",
+    "ray_cleanup_completed",
+)
 
 
 def stamp():
@@ -99,7 +108,9 @@ def prepare_attempt(template, directory, gpu, name, watch_id, simulator_commit):
     config = json.loads((template / "config.json").read_text())
     manifest = json.loads((template / "manifest.json").read_text())
     assert json.loads((template / "configuration-check.json").read_text())["passed"]
-    assert config["training"]["updates"] == 2, "This watcher launches the pending two-update smoke only"
+    assert config["training"]["updates"] in (2, 100), "Use a two-update smoke or 100-update formal experiment"
+    if config["training"]["updates"] == 100:
+        assert config.get("experiment_mode") == "formal" and config.get("requires_passed_validation")
     assert not directory.exists(), "Preserve prior attempts"
     directory.mkdir(parents=True)
     config.update(
@@ -110,8 +121,9 @@ def prepare_attempt(template, directory, gpu, name, watch_id, simulator_commit):
         gpu_allocation_managed_by_sequence=False,
         wall_time_limit_seconds=config.get("wall_time_limit_seconds", 1800),
     )
-    for filename in ("mismatch.yaml", "validation.jsonl", "configuration-check.json"):
-        (directory / filename).write_bytes((template / filename).read_bytes())
+    for filename in ("mismatch.yaml", "validation.jsonl", "configuration-check.json", "baseline-comparison.json"):
+        if (template / filename).exists():
+            (directory / filename).write_bytes((template / filename).read_bytes())
     for relative in ("results/logs", "cache", "tmp/sg-a"):
         (directory / relative).mkdir(parents=True, exist_ok=True)
     for key in ("XDG_CACHE_HOME", "TORCHINDUCTOR_CACHE_DIR", "TRITON_CACHE_DIR", "CUDA_CACHE_PATH"):
@@ -140,6 +152,77 @@ def prepare_attempt(template, directory, gpu, name, watch_id, simulator_commit):
     )
     save(directory / "manifest.json", manifest)
     return docker
+
+
+def validation_dependency(watch_directory, template, repo):
+    """Fail closed until the same recipe has passed the complete two-step gate."""
+    status_path = watch_directory / "status.json"
+    if not status_path.exists():
+        return {"state": "waiting", "reason": "Validation watcher has not written status"}
+    state = json.loads(status_path.read_text())
+    if state["state"] in ("failed", "stopped"):
+        return {"state": "failed", "reason": "Validation watcher ended with " + state["state"]}
+    if state["state"] != "completed":
+        return {"state": "waiting", "completed_updates": state.get("completed_updates", 0)}
+    try:
+        directory = Path(state["current_attempt"]["directory"])
+        report = json.loads((directory / "results/training-validation.json").read_text())
+        result = json.loads((directory / "results/status.json").read_text())
+        previous = json.loads((directory / "config.json").read_text())
+        previous_manifest = json.loads((directory / "manifest.json").read_text())
+        config = json.loads((template / "config.json").read_text())
+        manifest = json.loads((template / "manifest.json").read_text())
+        checks = {
+            "two_update_gate_passed": state.get("completed_updates") == 2
+            and state.get("exit_code") == 0
+            and report.get("passed") is True
+            and all(report.get("checks", {}).get(key) is True for key in VALIDATION_CHECKS)
+            and report.get("verified_rollout_ids") == [0, 1],
+            "training_status_passed": result.get("successful_training") is True
+            and result.get("training_validation_passed") is True
+            and result.get("completed_updates") == 2,
+            "same_runtime_and_recipe": previous_manifest["baseline_commit"] == manifest["baseline_commit"]
+            and previous_manifest["recipe"] == manifest["recipe"]
+            and previous["image_id"] == config["image_id"],
+            "same_training_dimensions": all(
+                previous["training"][key] == config["training"][key]
+                for key in (
+                    "model",
+                    "prompts_per_update",
+                    "samples_per_prompt",
+                    "global_batch_size",
+                    "response_token_limit",
+                    "seed",
+                    "learning_rate",
+                    "importance_correction",
+                )
+            ),
+            "same_quantizer_configuration": (directory / "mismatch.yaml").read_bytes()
+            == (template / "mismatch.yaml").read_bytes(),
+        }
+        command(
+            [
+                "git",
+                "-C",
+                str(repo),
+                "diff",
+                "--exit-code",
+                "--quiet",
+                previous_manifest["simulator_commit"],
+                "--",
+                "slime_plugins/nvfp4_sim",
+            ]
+        )
+        checks["same_simulator_source"] = True
+        return {
+            "state": "passed" if all(checks.values()) else "failed",
+            "checks": checks,
+            "watch_directory": str(watch_directory),
+            "validated_attempt": str(directory),
+            "validated_simulator_commit": previous_manifest["simulator_commit"],
+        }
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as exc:
+        return {"state": "failed", "reason": "Cannot establish completed validation provenance: " + str(exc)}
 
 
 def stop_own_container(name, watch_id):
@@ -186,6 +269,9 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--idle-seconds", type=float, default=300)
     parser.add_argument("--poll-seconds", type=float, default=5)
+    parser.add_argument(
+        "--after-validation", type=Path, help="Require this smoke watcher's full success before launch"
+    )
     args = parser.parse_args()
     if args.idle_seconds < 300 or not 1 <= args.poll_seconds <= 10:
         parser.error("Require at least 300 idle seconds and a 1-10 second poll interval")
@@ -198,6 +284,11 @@ def main():
     if (root / "status.json").exists():
         raise RuntimeError("Watch state already exists; choose a fresh directory to preserve it")
     assert json.loads((template / "configuration-check.json").read_text())["passed"]
+    config = json.loads((template / "config.json").read_text())
+    planned = config["training"]["updates"]
+    assert planned in (2, 100)
+    if config.get("requires_passed_validation"):
+        assert args.after_validation is not None, "Formal runs require --after-validation"
     repo = Path(__file__).resolve().parents[2]
     baseline_source = Path("/data2/huibingyu/slime-v040/code/slime")
     manifest = json.loads((template / "manifest.json").read_text())
@@ -207,14 +298,15 @@ def main():
     watch_id = "%s-%s" % (root.name, os.getpid())
     tracker = IdleTracker(args.idle_seconds, max(20, args.poll_seconds * 3))
     state = {
-        "state": "waiting_for_idle_gpu",
+        "state": "waiting_for_validation" if args.after_validation else "waiting_for_idle_gpu",
         "pid": os.getpid(),
         "watch_id": watch_id,
         "started_at": stamp(),
         "idle_threshold_seconds": args.idle_seconds,
         "poll_interval_seconds": args.poll_seconds,
         "criterion": "No compute PIDs, memory <=64 MiB, utilization 0%, strictly >300 observed seconds",
-        "planned_updates": 2,
+        "planned_updates": planned,
+        "experiment_mode": config.get("experiment_mode", "smoke"),
         "completed_updates": 0,
         "attempts": [],
         "simulator_commit": command(["git", "-C", str(repo), "rev-parse", "HEAD"]),
@@ -236,6 +328,7 @@ def main():
     signal.signal(signal.SIGINT, stop)
     process = log_handle = active_name = active_dir = active_gpu = None
     owned_pids = set()
+    dependency_passed = args.after_validation is None
     event("monitor_started", threshold_seconds=args.idle_seconds)
     try:
         while not stopping and not (root / "STOP").exists():
@@ -249,6 +342,20 @@ def main():
                 tracker.reset()
                 state.update(gpus=[], query_error=str(exc))
             state["updated_at"] = stamp()
+            if not dependency_passed:
+                dependency = validation_dependency(args.after_validation.resolve(), template, repo)
+                state["validation_dependency"] = dependency
+                if dependency["state"] == "failed":
+                    state.update(state="validation_failed", finished_at=stamp())
+                    event("validation_dependency_failed", dependency=dependency)
+                    break
+                dependency_passed = dependency["state"] == "passed"
+                if dependency_passed:
+                    save(root / "validation-dependency.json", dependency)
+                    state["state"] = "waiting_for_idle_gpu"
+                    event("validation_dependency_passed", dependency=dependency)
+                else:
+                    candidates = []
             if process is not None:
                 status_file = active_dir / "results/status.json"
                 if status_file.exists():
@@ -285,7 +392,9 @@ def main():
                         state["state"] = "waiting_for_idle_gpu"
                     else:
                         success = (
-                            code == 0 and result.get("successful_training") and result.get("completed_updates") == 2
+                            code == 0
+                            and result.get("successful_training")
+                            and result.get("completed_updates") == planned
                         )
                         if json.loads((active_dir / "config.json").read_text()).get("require_training_validation"):
                             report_path = active_dir / "results/training-validation.json"

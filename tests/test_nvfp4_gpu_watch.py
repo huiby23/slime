@@ -20,6 +20,73 @@ def card(idle=True, uuid="gpu-a", index=0):
 
 
 class GPUWatchTests(unittest.TestCase):
+    def test_validation_gate_waits_and_stops_on_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertEqual(watch.validation_dependency(root, root, root)["state"], "waiting")
+            watch.save(root / "status.json", {"state": "running", "completed_updates": 1})
+            self.assertEqual(watch.validation_dependency(root, root, root)["completed_updates"], 1)
+            watch.save(root / "status.json", {"state": "failed"})
+            self.assertEqual(watch.validation_dependency(root, root, root)["state"], "failed")
+
+    def test_validation_gate_requires_all_evidence_and_matching_recipe(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            attempt, template = root / "smoke", root / "formal"
+            (attempt / "results").mkdir(parents=True)
+            template.mkdir()
+            training = {
+                key: "same"
+                for key in (
+                    "model",
+                    "prompts_per_update",
+                    "samples_per_prompt",
+                    "global_batch_size",
+                    "response_token_limit",
+                    "seed",
+                    "learning_rate",
+                    "importance_correction",
+                )
+            }
+            for directory in (attempt, template):
+                watch.save(directory / "config.json", {"training": training, "image_id": "pinned-image"})
+                watch.save(
+                    directory / "manifest.json",
+                    {"baseline_commit": "baseline", "simulator_commit": "sim", "recipe": {"wgrad": "NVFP4"}},
+                )
+                (directory / "mismatch.yaml").write_text("same-quantizer-config")
+            watch.save(
+                root / "status.json",
+                {
+                    "state": "completed",
+                    "completed_updates": 2,
+                    "exit_code": 0,
+                    "current_attempt": {"directory": str(attempt)},
+                },
+            )
+            watch.save(
+                attempt / "results/status.json",
+                {"successful_training": True, "training_validation_passed": True, "completed_updates": 2},
+            )
+            report = {
+                "passed": True,
+                "verified_rollout_ids": [0, 1],
+                "checks": dict.fromkeys(watch.VALIDATION_CHECKS, True),
+            }
+            watch.save(attempt / "results/training-validation.json", report)
+            with patch.object(watch, "command", return_value=""):
+                self.assertEqual(watch.validation_dependency(root, template, root)["state"], "passed")
+                report["checks"]["two_active_optimizer_updates"] = False
+                watch.save(attempt / "results/training-validation.json", report)
+                self.assertEqual(watch.validation_dependency(root, template, root)["state"], "failed")
+                report["checks"]["two_active_optimizer_updates"] = True
+                watch.save(attempt / "results/training-validation.json", report)
+                (template / "mismatch.yaml").write_text("different-quantizer-config")
+                self.assertEqual(watch.validation_dependency(root, template, root)["state"], "failed")
+            (template / "mismatch.yaml").write_text("same-quantizer-config")
+            with patch.object(watch, "command", side_effect=subprocess.CalledProcessError(1, ["git", "diff"])):
+                self.assertEqual(watch.validation_dependency(root, template, root)["state"], "failed")
+
     def test_strict_threshold_and_independent_cards(self):
         tracker = watch.IdleTracker()
         for second in range(0, 301, 5):
@@ -108,6 +175,15 @@ class GPUWatchTests(unittest.TestCase):
             self.assertTrue((directory / "cache/torchinductor").is_dir())
             with self.assertRaises(AssertionError):
                 watch.prepare_attempt(template, directory, gpu, "our-container", "our-watch", "new-commit")
+            config.update(experiment_mode="formal", requires_passed_validation=True, wall_time_limit_seconds=96 * 3600)
+            config["training"]["updates"] = 100
+            watch.save(template / "config.json", config)
+            (template / "validation.jsonl").unlink()  # Formal eval uses the original 512-question asset.
+            directory = root / "formal-attempt"
+            watch.prepare_attempt(template, directory, gpu, "formal-container", "our-watch", "new-commit")
+            prepared = json.loads((directory / "config.json").read_text())
+            self.assertEqual(prepared["training"]["updates"], 100)
+            self.assertEqual(prepared["wall_time_limit_seconds"], 96 * 3600)
 
     def test_cleanup_refuses_a_container_with_a_different_owner(self):
         result = subprocess.CompletedProcess(

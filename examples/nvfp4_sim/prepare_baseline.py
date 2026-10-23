@@ -25,6 +25,18 @@ def replace_option(command, option, value):
         command.extend((option, str(value)))
 
 
+def cli_options(command):
+    options = {}
+    key = None
+    for token in command:
+        if token.startswith("--"):
+            key = token
+            options[key] = []
+        elif key is not None:
+            options[key].append(token)
+    return options
+
+
 def assert_gpu_idle(gpu):
     pids = subprocess.check_output(
         ["nvidia-smi", "--id=" + str(gpu), "--query-compute-apps=pid", "--format=csv,noheader,nounits"],
@@ -63,6 +75,7 @@ def main():
         action="store_true",
         help="Two baseline-sized training updates, eight eval questions, require learning-signal validation",
     )
+    mode.add_argument("--formal", action="store_true", help="100 updates and the original 512-question evaluation")
     parser.add_argument("--run", action="store_true", help="Run after checking that the selected GPU is idle")
     parser.add_argument(
         "--preflight", action="store_true", help="Resolve CLI/YAML and both entry points in a CPU-only container"
@@ -72,6 +85,8 @@ def main():
         parser.error("--updates must be positive")
     if args.training_smoke and args.updates != 2:
         parser.error("--training-smoke requires --updates 2")
+    if args.formal and (args.updates != 100 or args.run):
+        parser.error("Use --formal --updates 100; launch with watch_gpu.py --after-validation")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     if (output / "results/status.json").exists():
@@ -94,14 +109,15 @@ def main():
     config["container_run_dir"] = "/nvfp4-run/results"
     config["host_run_dir"] = str(output / "results")
     config["training"]["updates"] = args.updates
-    config["training"]["save_every_updates"] = 1
+    save_interval = baseline["training"]["save_every_updates"] if args.formal else 1
+    config["training"]["save_every_updates"] = save_interval
     config["training"]["precision"] = "NVFP4 default training recipe simulation"
     command = [
         value.replace(baseline["container_run_dir"], config["container_run_dir"])
         for value in baseline["training_command"]
     ]
     replace_option(command, "--num-rollout", args.updates)
-    replace_option(command, "--save-interval", 1)
+    replace_option(command, "--save-interval", save_interval)
     replace_option(command, "--custom-model-provider-path", "nvfp4_sim.megatron.model_provider")
     replace_option(
         command, "--sglang-json-model-override-args", json.dumps({"architectures": ["NVFP4SimQwen3ForCausalLM"]})
@@ -112,6 +128,31 @@ def main():
     custom_config.update(nvfp4_sim_chunk_blocks=8, nvfp4_sim_include_output_layer=True)
     (output / "mismatch.yaml").write_text(json.dumps(custom_config, indent=2) + "\n")
     replace_option(command, "--custom-config-path", "/nvfp4-run/mismatch.yaml")
+    if args.formal:
+        config["experiment_mode"] = "formal"
+        config["requires_passed_validation"] = True
+        config["wall_time_limit_seconds"] = 96 * 3600
+        replace_option(
+            command, "--custom-megatron-before-train-step-hook-path", "nvfp4_sim.training_validation.before_train_step"
+        )
+        expected = {
+            "updates": 100,
+            "prompts_per_update": 8,
+            "samples_per_prompt": 8,
+            "global_batch_size": 64,
+            "response_token_limit": 1024,
+            "validation_questions": 512,
+            "eval_every_updates": 25,
+            "save_every_updates": 50,
+        }
+        assert all(
+            config["training"][key] == value for key, value in expected.items()
+        ), "Formal baseline dimensions drifted"
+        # Explicitly start from the same HF initialization, never the smoke checkpoint.
+        assert (
+            command[command.index("--load") + 1]
+            == baseline["training_command"][baseline["training_command"].index("--load") + 1]
+        )
     if args.training_smoke:
         assert baseline["training"]["response_token_limit"] == 1024
         assert baseline["training"]["samples_per_prompt"] == 8
@@ -147,6 +188,39 @@ def main():
             eval_every_updates=1,
         )
     config["training_command"] = command
+    if args.formal:
+        old = cli_options(
+            [
+                value.replace(baseline["container_run_dir"], config["container_run_dir"])
+                for value in baseline["training_command"]
+            ]
+        )
+        new = cli_options(command)
+        mismatches = {
+            key: {"baseline": values, "formal": new.get(key)}
+            for key, values in old.items()
+            if key != "--custom-config-path" and new.get(key) != values
+        }
+        extra = set(new) - set(old)
+        assert not mismatches, mismatches
+        assert extra == {
+            "--custom-model-provider-path",
+            "--sglang-json-model-override-args",
+            "--custom-megatron-before-train-step-hook-path",
+        }, extra
+        comparison = {
+            "passed": True,
+            "baseline_config": str(args.baseline_config),
+            "baseline_commit": revision,
+            "matched_baseline_option_count": len(old) - 1,
+            "quantization_options": {key: new[key] for key in sorted(extra | {"--custom-config-path"})},
+            "initial_weights": new["--load"],
+            "validation_questions": config["training"]["validation_questions"],
+            "updates": args.updates,
+            "eval_interval": new["--eval-interval"],
+            "save_interval": new["--save-interval"],
+        }
+        (output / "baseline-comparison.json").write_text(json.dumps(comparison, indent=2) + "\n")
     env = config["environment"]
     for key, value in env.items():
         env[key] = (

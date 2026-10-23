@@ -34,6 +34,16 @@ def main():
         assert args.global_batch_size == 64 and args.num_rollout == 2
         assert args.custom_megatron_before_train_step_hook_path == "nvfp4_sim.training_validation.before_train_step"
         assert callable(load_function(args.custom_megatron_before_train_step_hook_path))
+    if config.get("experiment_mode") == "formal":
+        assert config["requires_passed_validation"]
+        assert json.loads((root / "baseline-comparison.json").read_text())["passed"]
+        assert args.num_rollout == 100 and args.eval_interval == 25 and args.save_interval == 50
+        assert args.rollout_batch_size == args.n_samples_per_prompt == 8 and args.global_batch_size == 64
+        assert args.rollout_max_response_len == args.eval_max_response_len == 1024
+        eval_path = Path(args.eval_prompt_data[1])
+        assert len(eval_path.read_text().splitlines()) == config["training"]["validation_questions"] == 512
+        assert args.custom_megatron_before_train_step_hook_path == "nvfp4_sim.training_validation.before_train_step"
+        assert callable(load_function(args.custom_megatron_before_train_step_hook_path))
     assert args.use_tis == config["training"]["importance_correction"]
     assert args.sglang_disable_decode_cuda_graph and args.sglang_disable_prefill_cuda_graph
     assert args.tensor_model_parallel_size == args.pipeline_model_parallel_size == args.context_parallel_size == 1
@@ -54,6 +64,10 @@ def main():
         "updates": args.num_rollout,
         "use_tis": args.use_tis,
         "require_training_validation": config.get("require_training_validation", False),
+        "experiment_mode": config.get("experiment_mode", "smoke"),
+        "validation_questions": config["training"]["validation_questions"],
+        "eval_interval": args.eval_interval,
+        "save_interval": args.save_interval,
         "response_token_limit": args.rollout_max_response_len,
         "prompts_per_update": args.rollout_batch_size,
         "samples_per_prompt": args.n_samples_per_prompt,

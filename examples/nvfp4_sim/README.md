@@ -78,9 +78,7 @@ python3 examples/nvfp4_sim/prepare_baseline.py \
 
 The host launcher and original training supervisor check GPU availability before
 initializing CUDA. `--run` also runs CPU preflight first. Use a fresh output
-directory after an actual run. For a baseline-sized experiment, omit
-`--quick-smoke` and set `--updates 100`; the original rollout/evaluation settings
-are retained. Checkpoint interval is one update.
+directory after an actual run. The smoke checkpoint interval is one update.
 
 To validate actual GRPO learning signals, use the two-update training smoke:
 
@@ -108,6 +106,30 @@ It also requires both checkpoints, completed weight synchronizations and an
 evaluation. `successful_training` is false if this evidence is missing, even if
 the original supervisor reports a clean exit. A passing smoke is integration
 evidence, not a convergence or accuracy result.
+
+## Formal experiment after validation
+
+```bash
+python3 examples/nvfp4_sim/prepare_baseline.py \
+  --output <fresh-formal-template> --formal --updates 100 --preflight
+python3 -u examples/nvfp4_sim/watch_gpu.py \
+  --template <fresh-formal-template> --output <fresh-formal-watch> \
+  --after-validation <training-smoke-watch-directory>
+```
+
+The formal watcher monitors both validation completion and idle GPUs. It launches
+only after the smoke watcher exits successfully and all seven validation checks
+pass, including both nonzero-gradient optimizer updates. It also verifies the
+same baseline commit, runtime image, quantizer configuration, training dimensions,
+and unchanged simulator plugin source. Failed/stopped validation prevents launch.
+
+The formal arm starts fresh from the original HF initialization and seed 42, with
+100 updates, 8 prompts x 8 responses, 1024-token limits, 512 evaluation questions,
+evaluation interval 25 and checkpoint interval 50. A comparison artifact verifies
+the baseline CLI options are retained except for quantization integration and
+relocated output/configuration paths. The passive optimizer observer remains
+enabled. The runtime limit is 96 hours to accommodate software simulation; this
+does not change the number of updates. Keep output/cache/checkpoints on `/data2`.
 
 For manual integration, set:
 
