@@ -41,7 +41,11 @@ def main():
         assert args.rollout_batch_size == args.n_samples_per_prompt == 8 and args.global_batch_size == 64
         assert args.rollout_max_response_len == args.eval_max_response_len == 1024
         eval_path = Path(args.eval_prompt_data[1])
-        assert len(eval_path.read_text().splitlines()) == config["training"]["validation_questions"] == 512
+        # Unicode line separators may occur inside a JSON string. Count actual
+        # JSONL records, not Python splitlines() segments.
+        with eval_path.open() as stream:
+            records = [json.loads(line) for line in stream if line.strip()]
+        assert len(records) == config["training"]["validation_questions"] == 512
         assert args.custom_megatron_before_train_step_hook_path == "nvfp4_sim.training_validation.before_train_step"
         assert callable(load_function(args.custom_megatron_before_train_step_hook_path))
     assert args.use_tis == config["training"]["importance_correction"]
