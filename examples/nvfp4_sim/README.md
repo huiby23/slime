@@ -95,6 +95,37 @@ Use BF16 and leave native `--fp4`/`--fp8` disabled. Keep SGLang prefill/decode C
 graphs disabled, as in the recorded baseline. Both the training worker and all
 SGLang child processes must inherit the package path and external model setting.
 
+## Wait for an idle GPU
+
+After preparing a two-update quick smoke with `--preflight`, run the host-only
+watcher in a persistent background process:
+
+```bash
+python3 -u examples/nvfp4_sim/watch_gpu.py \
+  --template outputs/nvfp4-sim-preflight \
+  --output outputs/nvfp4-gpu-watch-NEW
+```
+
+It polls all GPUs every five seconds. A card qualifies only after more than 300
+observed seconds with no compute processes, memory usage at most 64 MiB, and 0%
+utilization. Activity, failed queries, or long sampling gaps reset the timer.
+Before launching, it checks the selected card again; the training supervisor
+also checks before initializing CUDA. These checks do not reserve the GPU.
+
+`status.json`, `watch.pid`, and `events.jsonl` record monitoring and launch state.
+Each attempt gets its own configuration, launch log, and results directory.
+If another process claims the selected GPU during the experiment, the watcher
+stops only its own labeled container and waits for a new idle interval. Actual
+training failures stop the watcher for inspection. Create `STOP` in the watch
+directory to stop monitoring and its active experiment. Use a fresh directory
+for a new watcher to preserve earlier evidence.
+
+The scheduler's host-only checks can run without PyTorch:
+
+```bash
+python3 -m unittest discover -s tests -p 'test_nvfp4_gpu_watch.py' -v
+```
+
 ## Validation
 
 The CPU suite compares E2M1/E4M3 quantization and RHT with the NVIDIA reference
