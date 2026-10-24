@@ -15,6 +15,7 @@ import os
 import signal
 import subprocess
 import time
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -43,6 +44,56 @@ def save(path, value):
 
 def command(argv):
     return subprocess.check_output(argv, text=True, timeout=30).strip()
+
+
+class RunningContainer:
+    """Observe an owned running job when replacing its host monitor."""
+
+    def __init__(self, name, directory):
+        self.name, self.directory, self.returncode = name, directory, None
+
+    def poll(self):
+        result = subprocess.run(["docker", "inspect", self.name], text=True, capture_output=True, timeout=15)
+        if result.returncode == 0:
+            state = json.loads(result.stdout)[0]["State"]
+            if state["Running"]:
+                return None
+            self.returncode = state["ExitCode"]
+        elif "No such" in result.stderr:
+            path = self.directory / "results/status.json"
+            status = json.loads(path.read_text()) if path.exists() else {}
+            self.returncode = 0 if status.get("successful_training") else 1
+        else:
+            raise RuntimeError(result.stderr)
+        return self.returncode
+
+    def wait(self, timeout):
+        deadline = time.monotonic() + timeout
+        while self.poll() is None:
+            if time.monotonic() > deadline:
+                raise subprocess.TimeoutExpired(["docker", "wait", self.name], timeout)
+            time.sleep(0.2)
+        return self.returncode
+
+
+def resume_checkpoint(attempt):
+    """A model tracker alone is insufficient: require the matching data cursor."""
+    root = attempt.resolve() / "results/checkpoints"
+    tracker = root / "latest_checkpointed_iteration.txt"
+    if not tracker.is_file():
+        raise RuntimeError("No durable checkpoint is available in " + str(attempt))
+    step = int(tracker.read_text().strip())
+    model = root / ("iter_%07d" % step)
+    cursor = root / "rollout" / ("global_dataset_state_dict_%d.pt" % step)
+    payloads = list(model.glob("*.distcp"))
+    if step < 0 or not (model / ".metadata").is_file() or not payloads or not cursor.is_file():
+        raise RuntimeError("Incomplete model/optimizer/dataset checkpoint: " + str(root))
+    if (model / ".metadata").stat().st_size == 0 or any(path.stat().st_size == 0 for path in payloads):
+        raise RuntimeError("Empty checkpoint payload: " + str(model))
+    with zipfile.ZipFile(cursor) as archive:
+        if archive.testzip() is not None:
+            raise RuntimeError("Incomplete dataset cursor: " + str(cursor))
+    return {"directory": str(root), "step": step, "completed_updates": step + 1}
 
 
 def snapshot():
@@ -103,7 +154,7 @@ class IdleTracker:
         )
 
 
-def prepare_attempt(template, directory, gpu, name, watch_id, simulator_commit):
+def prepare_attempt(template, directory, gpu, name, watch_id, simulator_commit, resume_from=None):
     """Reuse the validated CLI; change only GPU assignment and host output path."""
     config = json.loads((template / "config.json").read_text())
     manifest = json.loads((template / "manifest.json").read_text())
@@ -131,7 +182,6 @@ def prepare_attempt(template, directory, gpu, name, watch_id, simulator_commit):
         if value.startswith("/nvfp4-run/"):
             (directory / value[len("/nvfp4-run/") :]).mkdir(parents=True, exist_ok=True)
     (directory / "cache/xdg/torch/kernels").mkdir(parents=True, exist_ok=True)
-    save(directory / "config.json", config)
     docker = copy.deepcopy(manifest["docker_command"])
     docker[docker.index("--gpus") + 1] = "device=" + gpu["uuid"]
     found_mount = False
@@ -143,6 +193,27 @@ def prepare_attempt(template, directory, gpu, name, watch_id, simulator_commit):
     assert docker[:2] == ["docker", "run"]
     assert "--name" not in docker, "Use the unchanged preflight template, not a prior attempt"
     docker[2:2] = ["--name", name, "--label", LABEL + "=" + watch_id]
+    if resume_from is not None:
+        previous = json.loads((resume_from / "config.json").read_text())
+        previous_manifest = json.loads((resume_from / "manifest.json").read_text())
+        assert previous.get("experiment_mode") == config.get("experiment_mode") == "formal"
+        assert previous["image_id"] == config["image_id"] and previous_manifest["recipe"] == manifest["recipe"]
+        assert previous_manifest["baseline_commit"] == manifest["baseline_commit"]
+        assert previous["training"] == config["training"]
+        assert (resume_from / "mismatch.yaml").read_bytes() == (template / "mismatch.yaml").read_bytes()
+        checkpoint = resume_checkpoint(resume_from)
+        command_argv = config["training_command"]
+        command_argv[:] = [
+            token for token in command_argv if token not in ("--finetune", "--no-load-optim", "--no-load-rng")
+        ]
+        command_argv[command_argv.index("--load") + 1] = "/nvfp4-resume"
+        command_argv.extend(
+            ("--start-rollout-id", str(checkpoint["completed_updates"]), "--ckpt-step", str(checkpoint["step"]))
+        )
+        docker[2:2] = ["--mount", "type=bind,src=%s,dst=/nvfp4-resume,readonly" % checkpoint["directory"]]
+        config["resume_checkpoint"] = checkpoint
+        manifest["resume_checkpoint"] = checkpoint
+    save(directory / "config.json", config)
     manifest.update(
         docker_command=docker,
         idle_observation=gpu,
@@ -272,6 +343,14 @@ def main():
     parser.add_argument(
         "--after-validation", type=Path, help="Require this smoke watcher's full success before launch"
     )
+    parser.add_argument(
+        "--adopt-running",
+        action="store_true",
+        help="Replace a dead monitor without restarting its owned training container",
+    )
+    parser.add_argument(
+        "--resume-from", type=Path, help="Resume a formal attempt's model, optimizer, RNG and dataset cursor"
+    )
     args = parser.parse_args()
     if args.idle_seconds < 300 or not 1 <= args.poll_seconds <= 10:
         parser.error("Require at least 300 idle seconds and a 1-10 second poll interval")
@@ -281,8 +360,21 @@ def main():
     fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
     if (root / "STOP").exists():
         raise RuntimeError("STOP is present; choose a fresh watch directory to restart")
-    if (root / "status.json").exists():
+    adopted = json.loads((root / "status.json").read_text()) if args.adopt_running else None
+    if (root / "status.json").exists() and not args.adopt_running:
         raise RuntimeError("Watch state already exists; choose a fresh directory to preserve it")
+    if adopted is not None:
+        assert adopted["state"] == "running" and adopted.get("current_attempt")
+        try:
+            os.kill(adopted["pid"], 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise RuntimeError("Previous watcher is still alive; refuse competing monitors")
+        info = json.loads(command(["docker", "inspect", adopted["current_attempt"]["container"]]))[0]
+        assert info["Config"].get("Labels", {}).get(LABEL) == adopted["watch_id"] and info["State"]["Running"]
+    if args.resume_from is not None:
+        resume_checkpoint(args.resume_from)
     assert json.loads((template / "configuration-check.json").read_text())["passed"]
     config = json.loads((template / "config.json").read_text())
     planned = config["training"]["updates"]
@@ -311,6 +403,14 @@ def main():
         "attempts": [],
         "simulator_commit": command(["git", "-C", str(repo), "rev-parse", "HEAD"]),
     }
+    if adopted is not None:
+        state = adopted
+        state.setdefault("monitor_replacements", []).append(
+            {"previous_pid": state["pid"], "pid": os.getpid(), "at": stamp()}
+        )
+        state.update(pid=os.getpid(), monitor_commit=command(["git", "-C", str(repo), "rev-parse", "HEAD"]))
+        watch_id = state["watch_id"]
+    state["formal_contention_policy"] = "observe_without_stopping_existing_training"
     (root / "watch.pid").write_text(str(os.getpid()) + "\n")
     save(root / "status.json", state)
     stopping = False
@@ -329,6 +429,13 @@ def main():
     process = log_handle = active_name = active_dir = active_gpu = None
     owned_pids = set()
     dependency_passed = args.after_validation is None
+    if adopted is not None:
+        active = state["current_attempt"]
+        active_name, active_dir = active["container"], Path(active["directory"])
+        active_gpu = {"uuid": active["gpu_uuid"], "index": active["physical_gpu"]}
+        process = RunningContainer(active_name, active_dir)
+        log_handle = (active_dir / "launch.log").open("a")
+        dependency_passed = state.get("validation_dependency", {}).get("state") == "passed"
     event("monitor_started", threshold_seconds=args.idle_seconds)
     try:
         while not stopping and not (root / "STOP").exists():
@@ -368,6 +475,18 @@ def main():
                             foreign = foreign_pids(active_name, card, owned_pids)
                         except subprocess.CalledProcessError:
                             foreign = []  # Container is starting/exiting; the supervisor also checks before CUDA init.
+                        if foreign and planned == 100:
+                            if state.get("foreign_gpu_pids") != foreign:
+                                event(
+                                    "gpu_shared_during_training",
+                                    gpu=active_gpu["index"],
+                                    foreign_pids=foreign,
+                                    action="keep_existing_training_running",
+                                )
+                            state["foreign_gpu_pids"] = foreign
+                            foreign = []
+                        elif planned == 100:
+                            state.pop("foreign_gpu_pids", None)
                         if foreign:
                             event("gpu_contention", gpu=active_gpu["index"], foreign_pids=foreign)
                             stop_own_container(active_name, watch_id)
@@ -423,7 +542,9 @@ def main():
                 number = len(state["attempts"]) + 1
                 active_name = "huibingyu-nvfp4-watch-%s-%03d" % (os.getpid(), number)
                 active_dir = root / ("attempt-%03d" % number)
-                argv = prepare_attempt(template, active_dir, gpu, active_name, watch_id, state["simulator_commit"])
+                argv = prepare_attempt(
+                    template, active_dir, gpu, active_name, watch_id, state["simulator_commit"], args.resume_from
+                )
                 log_handle = (active_dir / "launch.log").open("w")
                 process = subprocess.Popen(argv, stdout=log_handle, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL)
                 active_gpu, owned_pids = gpu, set()

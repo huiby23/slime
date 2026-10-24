@@ -163,11 +163,26 @@ also checks before initializing CUDA. These checks do not reserve the GPU.
 
 `status.json`, `watch.pid`, and `events.jsonl` record monitoring and launch state.
 Each attempt gets its own configuration, launch log, and results directory.
-If another process claims the selected GPU during the experiment, the watcher
-stops only its own labeled container and waits for a new idle interval. Actual
-training failures stop the watcher for inspection. Create `STOP` in the watch
+For the short smoke, a competing process causes the watcher to stop its own
+labeled container and wait again. During a formal experiment, GPU sharing is
+recorded and the existing training job keeps running. Another process appearing
+alone must not discard hours of training. Actual training failures stop the
+watcher for inspection. Create `STOP` in the watch
 directory to stop monitoring and its active experiment. Use a fresh directory
 for a new watcher to preserve earlier evidence.
+
+`--adopt-running` replaces a dead host monitor while retaining its owned running
+container, attempt directory and progress. It refuses a live previous monitor or
+a container with a different ownership label.
+
+To resume a formal job, pass `--resume-from <previous-attempt-directory>` with a
+fresh watch directory. This requires a complete model/optimizer checkpoint and
+the corresponding saved dataset cursor. It removes the HF finetuning and
+optimizer/RNG-reset flags, mounts the prior checkpoint read-only, and starts at
+the saved rollout plus one. Resume restores training RNG, optimizer, scheduler
+and dataset position; a restarted SGLang worker is not guaranteed to reproduce
+the same sampling RNG stream bit for bit. The formal save interval remains 50;
+progress before the first checkpoint cannot be restored after process loss.
 
 The scheduler's host-only checks can run without PyTorch:
 

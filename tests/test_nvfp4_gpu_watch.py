@@ -5,6 +5,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,6 +21,47 @@ def card(idle=True, uuid="gpu-a", index=0):
 
 
 class GPUWatchTests(unittest.TestCase):
+    def test_existing_container_monitor_only_inspects_and_keeps_running(self):
+        alive = subprocess.CompletedProcess([], 0, json.dumps([{"State": {"Running": True, "ExitCode": 0}}]), "")
+        done = subprocess.CompletedProcess([], 0, json.dumps([{"State": {"Running": False, "ExitCode": 0}}]), "")
+        with patch.object(watch.subprocess, "run", side_effect=[alive, done]) as run:
+            process = watch.RunningContainer("owned", Path("/unused"))
+            self.assertIsNone(process.poll())
+            self.assertEqual(process.wait(timeout=1), 0)
+            self.assertEqual([call.args[0] for call in run.call_args_list], [["docker", "inspect", "owned"]] * 2)
+
+    def test_removed_container_requires_successful_training_status(self):
+        removed = subprocess.CompletedProcess([], 1, "", "Error: No such container")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "results").mkdir()
+            with patch.object(watch.subprocess, "run", return_value=removed):
+                process = watch.RunningContainer("owned", root)
+                self.assertEqual(process.poll(), 1)
+                watch.save(root / "results/status.json", {"successful_training": True})
+                self.assertEqual(process.poll(), 0)
+
+    def test_resume_rejects_missing_model_or_dataset_state(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with self.assertRaisesRegex(RuntimeError, "No durable checkpoint"):
+                watch.resume_checkpoint(root)
+            checkpoint = root / "results/checkpoints"
+            checkpoint.mkdir(parents=True)
+            (checkpoint / "latest_checkpointed_iteration.txt").write_text("49\n")
+            model = checkpoint / "iter_0000049"
+            model.mkdir()
+            (model / ".metadata").write_text("model and optimizer metadata")
+            (model / "__0_0.distcp").write_text("parameters and optimizer state")
+            with self.assertRaisesRegex(RuntimeError, "Incomplete"):
+                watch.resume_checkpoint(root)
+            (checkpoint / "rollout").mkdir()
+            with zipfile.ZipFile(checkpoint / "rollout/global_dataset_state_dict_49.pt", "w") as archive:
+                archive.writestr("data.pkl", "dataset cursor")
+            info = watch.resume_checkpoint(root)
+            self.assertEqual(info["completed_updates"], 50)
+            self.assertEqual(info["step"], 49)
+
     def test_validation_gate_waits_and_stops_on_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -184,6 +226,40 @@ class GPUWatchTests(unittest.TestCase):
             prepared = json.loads((directory / "config.json").read_text())
             self.assertEqual(prepared["training"]["updates"], 100)
             self.assertEqual(prepared["wall_time_limit_seconds"], 96 * 3600)
+            config.update(
+                image_id="pinned-image",
+                training_command=[
+                    "python",
+                    "train.py",
+                    "--load",
+                    "initial-HF",
+                    "--finetune",
+                    "--no-load-optim",
+                    "--no-load-rng",
+                ],
+            )
+            original.update(baseline_commit="baseline", recipe={"wgrad": "NVFP4"})
+            watch.save(template / "config.json", config)
+            watch.save(template / "manifest.json", original)
+            source = root / "previous-formal-attempt"
+            source.mkdir()
+            watch.save(source / "config.json", config)
+            watch.save(source / "manifest.json", original)
+            (source / "mismatch.yaml").write_bytes((template / "mismatch.yaml").read_bytes())
+            selected = {"directory": str(source / "results/checkpoints"), "step": 49, "completed_updates": 50}
+            directory = root / "resumed-attempt"
+            with patch.object(watch, "resume_checkpoint", return_value=selected):
+                argv = watch.prepare_attempt(
+                    template, directory, gpu, "resumed-container", "our-watch", "new-commit", source
+                )
+            resumed = json.loads((directory / "config.json").read_text())
+            command = resumed["training_command"]
+            self.assertEqual(command[command.index("--load") + 1], "/nvfp4-resume")
+            self.assertEqual(command[command.index("--start-rollout-id") + 1], "50")
+            self.assertEqual(command[command.index("--ckpt-step") + 1], "49")
+            self.assertTrue(all(flag not in command for flag in ("--finetune", "--no-load-optim", "--no-load-rng")))
+            self.assertIn("type=bind,src=%s,dst=/nvfp4-resume,readonly" % selected["directory"], argv)
+            self.assertIn("--finetune", json.loads((template / "config.json").read_text())["training_command"])
 
     def test_cleanup_refuses_a_container_with_a_different_owner(self):
         result = subprocess.CompletedProcess(
