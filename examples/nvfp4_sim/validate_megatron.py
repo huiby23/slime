@@ -6,6 +6,8 @@ model checks integration; it is not an accuracy/convergence experiment.
 
 import argparse
 import json
+import hashlib
+import os
 import tempfile
 from pathlib import Path
 
@@ -29,10 +31,16 @@ def main():
     args = parser.parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("This check requires an exclusively available CUDA GPU")
-    torch.cuda.set_device(0)
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    rank = int(os.environ.get("RANK", "0"))
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    torch.cuda.set_device(local_rank)
     torch.manual_seed(42)
     with tempfile.TemporaryDirectory() as work:
-        dist.init_process_group("nccl", init_method=f"file://{work}/distributed", rank=0, world_size=1)
+        if world_size > 1:
+            dist.init_process_group("nccl")
+        else:
+            dist.init_process_group("nccl", init_method=f"file://{work}/distributed", rank=0, world_size=1)
         parallel_state.initialize_model_parallel(tensor_model_parallel_size=1, pipeline_model_parallel_size=1)
         model_parallel_cuda_manual_seed(42)
         try:
@@ -90,7 +98,8 @@ def main():
             for step in range(2):
                 ddp.zero_grad_buffer()
                 optimizer.zero_grad()
-                tokens = torch.randint(0, 128, (1, 19), device="cuda")
+                generator = torch.Generator(device="cuda").manual_seed(1000 + rank * 10 + step)
+                tokens = torch.randint(0, 128, (1, 19), device="cuda", generator=generator)
                 positions = torch.arange(19, device="cuda").unsqueeze(0)
                 mask = torch.triu(torch.ones(1, 1, 19, 19, device="cuda", dtype=torch.bool), diagonal=1)
                 logits = ddp(tokens, positions, mask)
@@ -103,11 +112,14 @@ def main():
                 success, grad_norm, _ = optimizer.step()
                 assert success and torch.isfinite(torch.as_tensor(grad_norm))
                 steps.append({"step": step, "loss": loss.item(), "grad_norm": float(grad_norm)})
+                norms = [None] * world_size
+                dist.all_gather_object(norms, float(grad_norm))
+                assert max(norms) - min(norms) < 1e-6, norms
             assert not torch.equal(parameter, initial_weight), "Optimizer did not update simulated weights"
             for key in ("fprop", "dgrad", "wgrad", "rht_x", "rht_g", "sr_dgrad", "sr_wgrad"):
                 assert recipe.counters[key] >= len(model._nvfp4_modules) * 2, (key, recipe.counters)
             args.output.mkdir(parents=True, exist_ok=True)
-            checkpoint = args.output / "checkpoint.pt"
+            checkpoint = args.output / ("checkpoint.pt" if world_size == 1 else f"checkpoint-rank-{rank}.pt")
             torch.save(
                 {
                     "model": model.state_dict(),
@@ -124,7 +136,9 @@ def main():
             torch.cuda.set_rng_state(restored["rng"])
             report = {
                 "passed": True,
-                "device": torch.cuda.get_device_name(0),
+                "device": torch.cuda.get_device_name(local_rank),
+                "rank": rank,
+                "world_size": world_size,
                 "torch": torch.__version__,
                 "patched_linears": list(model._nvfp4_modules),
                 "recipe_counters": dict(recipe.counters),
@@ -133,8 +147,21 @@ def main():
                 "model_checkpoint_round_trip": True,
                 "optimizer_metadata_round_trip": True,
                 "checkpoint": str(checkpoint),
+                "parameter_sha256": hashlib.sha256(
+                    parameter.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes()
+                ).hexdigest(),
             }
-            (args.output / "validation.json").write_text(json.dumps(report, indent=2) + "\n")
+            (args.output / f"validation-rank-{rank}.json").write_text(json.dumps(report, indent=2) + "\n")
+            reports = [None] * world_size
+            dist.all_gather_object(reports, report)
+            assert len({item["parameter_sha256"] for item in reports}) == 1, "Model replicas diverged"
+            if rank == 0:
+                combined = (
+                    report
+                    if world_size == 1
+                    else {"passed": True, "world_size": world_size, "replicas_equal": True, "ranks": reports}
+                )
+                (args.output / "validation.json").write_text(json.dumps(combined, indent=2) + "\n")
             print(json.dumps(report, indent=2))
         finally:
             parallel_state.destroy_model_parallel()

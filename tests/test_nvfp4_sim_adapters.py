@@ -170,6 +170,47 @@ def test_sglang_method_requantizes_in_place_weight_updates():
     torch.testing.assert_close(updated, nvfp4_linear(x, layer.weight, bias, recipe=NVFP4Recipe()), rtol=0, atol=0)
 
 
+def test_inference_cache_preserves_values_and_reuses_only_weight_casts():
+    pytest.importorskip("sglang")
+    from slime_plugins.nvfp4_sim.sglang_models import qwen3
+
+    method = qwen3.NVFP4SimLinearMethod(NVFP4Recipe(), cache_weights=True)
+    layer = SimpleNamespace(weight=torch.randn(48, 32).bfloat16())
+    x = torch.randn(19, 32).bfloat16()
+    with patch.object(qwen3, "quantize", wraps=qwen3.quantize) as quantizer:
+        first = method.apply(layer, x)
+        second = method.apply(layer, x)
+        assert quantizer.call_count == 3  # Two activation casts, one weight cast.
+    torch.testing.assert_close(first, second, rtol=0, atol=0)
+    layer.weight.copy_(torch.randn_like(layer.weight))
+    updated = method.apply(layer, x)
+    torch.testing.assert_close(updated, nvfp4_linear(x, layer.weight, recipe=NVFP4Recipe()), rtol=0, atol=0)
+
+
+def test_model_loader_invalidates_cache_even_for_data_writes():
+    pytest.importorskip("sglang")
+    from slime_plugins.nvfp4_sim.sglang_models import qwen3
+
+    model = qwen3.NVFP4SimQwen3ForCausalLM.__new__(qwen3.NVFP4SimQwen3ForCausalLM)
+    torch.nn.Module.__init__(model)
+    model.projection = torch.nn.Linear(32, 48, bias=False, dtype=torch.bfloat16)
+    method = qwen3.NVFP4SimLinearMethod(NVFP4Recipe(), cache_weights=True)
+    model.projection.quant_method = method
+    x = torch.randn(19, 32).bfloat16()
+    initial = method.apply(model.projection, x)
+
+    def load(instance, weights):
+        instance.projection.weight.data.copy_(weights)
+        return {"projection.weight"}
+
+    with patch.object(qwen3.Qwen3ForCausalLM, "load_weights", load):
+        model.load_weights(torch.randn_like(model.projection.weight))
+    assert method._weight_cache is None
+    updated = method.apply(model.projection, x)
+    assert not torch.equal(initial, updated)
+    torch.testing.assert_close(updated, nvfp4_linear(x, model.projection.weight, recipe=NVFP4Recipe()), rtol=0, atol=0)
+
+
 def test_native_megatron_head_keeps_tied_embedding_gradient(te_layers):
     from types import MethodType
 

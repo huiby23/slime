@@ -31,7 +31,8 @@ The tied embedding/output weight retains both gradient contributions; SGLang's
 shared embedding keeps its original embedding lookup implementation. Attention,
 normalization and embedding lookup retain their baseline precision.
 
-The adapter requires dense Qwen3 and TP=PP=CP=EP=1. It fails on unsupported layers
+The adapter requires dense Qwen3 and TP=PP=CP=EP=1; data parallelism can use
+multiple full replicas. It fails on unsupported layers
 or incomplete projection coverage. Hardware packing, scale swizzles, hardware RNG
 bit streams, and exact Tensor Core accumulation order are outside the simulator.
 This does not establish bitwise equivalence or Blackwell speed/memory savings.
@@ -189,6 +190,39 @@ The scheduler's host-only checks can run without PyTorch:
 ```bash
 python3 -m unittest discover -s tests -p 'test_nvfp4_gpu_watch.py' -v
 ```
+
+## Four-GPU continuation and best/last
+
+`prepare_parallel.py` prepares a continuation on GPUs 0, 1, 6, and 7: Megatron
+DP=4 with TP/PP/CP/EP=1, and four independent TP=1 SGLang engines. Global batch
+64, 8 prompts x 8 answers, 1024-token limits, the optimizer, and the NVFP4
+arithmetic stay unchanged. The checkpoint includes FP32 optimizer state, training
+RNG and the dataset cursor. The distributed optimizer checkpoint is resharded by
+Megatron when loading onto four replicas. Sampling RNG streams can change after
+restarting engines or changing replica count.
+
+The rollout adapter can cache deterministic weight casts between updates. Both
+the baseline's regular and flattened-bucket update APIs call `model.load_weights`,
+which invalidates every cache; tensor identity/version changes also invalidate a
+cast. Activation casts and all NVFP4 GEMM arithmetic are unchanged. The cache is
+optional and is not intended for an external direct-copy loader that bypasses
+`model.load_weights`.
+
+`train_best_last.py` runs the pinned Slime driver and replaces only its save
+operation. Every optimizer update writes the native model, optimizer, RNG and
+dataset cursor to a staging directory, then atomically publishes `checkpoints/last`.
+The evaluation log hook publishes `checkpoints/best` when the 512-question GSM8K
+score improves. Only snapshots referenced by best or last remain; both names may
+point to the same snapshot. A partial write never replaces the previous last.
+Best becomes available after the first evaluation of a saved trained checkpoint.
+This continuation enables native TensorBoard logging.
+
+`checkpoint_live.py` can safely export the existing single-GPU job before this
+migration. It pauses the recorded CPU driver during an in-flight training RPC,
+waits for that RPC to finish, and saves the matching model and source boundary.
+On failure it resumes the original driver. `--hold-driver` retains the pause
+only after the checkpoint is complete, allowing the launch controller to migrate
+without losing an update. The existing GPU actors are not killed to make a save.
 
 ## Validation
 

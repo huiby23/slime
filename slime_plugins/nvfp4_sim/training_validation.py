@@ -54,7 +54,12 @@ def before_train_step(args, rollout_id, step_id, models, optimizer, scheduler):
             "projection": projections[0],
             "master": master,
             "master_description": description,
-            "path": Path(args.save).parent / "optimizer-validation.jsonl",
+            "path": Path(args.save).parent
+            / (
+                "optimizer-validation.jsonl"
+                if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+                else f"optimizer-validation-rank-{torch.distributed.get_rank()}.jsonl"
+            ),
         }
         original_step = optimizer.step
 
@@ -77,6 +82,8 @@ def before_train_step(args, rollout_id, step_id, models, optimizer, scheduler):
                 "rollout_id": context["rollout_id"],
                 "step_id": context["step_id"],
                 "optimizer_success": bool(outcome[0]),
+                "rank": torch.distributed.get_rank() if torch.distributed.is_initialized() else 0,
+                "world_size": torch.distributed.get_world_size() if torch.distributed.is_initialized() else 1,
                 "global_grad_norm": global_norm,
                 "grad_finite": projection_finite and math.isfinite(global_norm),
                 "projection": name,

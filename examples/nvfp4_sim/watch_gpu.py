@@ -79,6 +79,8 @@ class RunningContainer:
 def resume_checkpoint(attempt):
     """A model tracker alone is insufficient: require the matching data cursor."""
     root = attempt.resolve() / "results/checkpoints"
+    if (root / "last").exists():
+        root = (root / "last").resolve()
     tracker = root / "latest_checkpointed_iteration.txt"
     if not tracker.is_file():
         raise RuntimeError("No durable checkpoint is available in " + str(attempt))

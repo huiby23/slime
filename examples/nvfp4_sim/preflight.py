@@ -37,7 +37,8 @@ def main():
     if config.get("experiment_mode") == "formal":
         assert config["requires_passed_validation"]
         assert json.loads((root / "baseline-comparison.json").read_text())["passed"]
-        assert args.num_rollout == 100 and args.eval_interval == 25 and args.save_interval == 50
+        assert args.num_rollout == 100 and args.eval_interval == 25
+        assert args.save_interval == (1 if config.get("checkpoint_policy") == "best-last" else 50)
         assert args.rollout_batch_size == args.n_samples_per_prompt == 8 and args.global_batch_size == 64
         assert args.rollout_max_response_len == args.eval_max_response_len == 1024
         eval_path = Path(args.eval_prompt_data[1])
@@ -48,6 +49,14 @@ def main():
         assert len(records) == config["training"]["validation_questions"] == 512
         assert args.custom_megatron_before_train_step_hook_path == "nvfp4_sim.training_validation.before_train_step"
         assert callable(load_function(args.custom_megatron_before_train_step_hook_path))
+        if config.get("parallel_nvfp4"):
+            assert args.actor_num_gpus_per_node == args.rollout_num_gpus == args.num_gpus_per_node == 4
+            assert args.rollout_num_gpus_per_engine == 1
+            assert args.start_rollout_id == config["resume_checkpoint"]["completed_updates"]
+            assert not args.finetune and not args.no_load_optim and not args.no_load_rng
+            assert args.use_tensorboard and not args.async_save
+            assert args.custom_eval_rollout_log_function_path == "nvfp4_sim.checkpoint_policy.eval_log_hook"
+            assert callable(load_function(args.custom_eval_rollout_log_function_path))
     assert args.use_tis == config["training"]["importance_correction"]
     assert args.sglang_disable_decode_cuda_graph and args.sglang_disable_prefill_cuda_graph
     assert args.tensor_model_parallel_size == args.pipeline_model_parallel_size == args.context_parallel_size == 1
@@ -76,6 +85,9 @@ def main():
         "prompts_per_update": args.rollout_batch_size,
         "samples_per_prompt": args.n_samples_per_prompt,
         "global_batch_size": args.global_batch_size,
+        "data_parallel_size": config["training"].get("data_parallel_size", 1),
+        "checkpoint_policy": config.get("checkpoint_policy", "periodic"),
+        "tensorboard": args.use_tensorboard,
         "cpu_only": True,
     }
     (root / "configuration-check.json").write_text(json.dumps(report, indent=2) + "\n")
