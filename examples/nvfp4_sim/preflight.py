@@ -53,6 +53,7 @@ def main():
             assert args.actor_num_gpus_per_node == args.rollout_num_gpus == args.num_gpus_per_node == 4
             assert args.rollout_num_gpus_per_engine == 1
             assert args.start_rollout_id == config["resume_checkpoint"]["completed_updates"]
+            assert not args.check_weight_update_equal, "Initial HF equality diagnostic is invalid for a trained resume"
             assert not args.finetune and not args.no_load_optim and not args.no_load_rng
             assert args.use_tensorboard and not args.async_save
             assert args.custom_eval_rollout_log_function_path == "nvfp4_sim.checkpoint_policy.eval_log_hook"

@@ -61,7 +61,13 @@ def main():
     config["environment"].update(CUDA_VISIBLE_DEVICES="0,1,2,3", TENSORBOARD_DIR="/nvfp4-run/results/tensorboard")
     command = config["training_command"]
     original = cli_options(command)
-    command[:] = [token for token in command if token not in ("--finetune", "--no-load-optim", "--no-load-rng")]
+    # This diagnostic compares the first pushed weights with the original HF
+    # model. A trained resume checkpoint must differ from that reference.
+    command[:] = [
+        token
+        for token in command
+        if token not in ("--finetune", "--no-load-optim", "--no-load-rng", "--check-weight-update-equal")
+    ]
     command[1] = "/quant/examples/nvfp4_sim/train_best_last.py"
     for option, value in [
         ("--load", "/nvfp4-resume"),
@@ -91,6 +97,7 @@ def main():
         "--finetune",
         "--no-load-optim",
         "--no-load-rng",
+        "--check-weight-update-equal",
         "--actor-num-gpus-per-node",
         "--rollout-num-gpus",
         "--num-gpus-per-node",
