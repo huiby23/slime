@@ -22,7 +22,14 @@ def main():
     assert json.loads((root / "configuration-check.json").read_text())["passed"]
     assert not (root / "results/status.json").exists()
     for gpu in config["physical_gpus"]:
-        assert_gpu_idle(gpu)
+        if config.get("reservation_host_pids"):
+            pids = subprocess.check_output(
+                ["nvidia-smi", "--id=" + str(gpu), "--query-compute-apps=pid", "--format=csv,noheader,nounits"],
+                text=True,
+            )
+            assert {int(line) for line in pids.splitlines() if line.strip()} <= set(config["reservation_host_pids"])
+        else:
+            assert_gpu_idle(gpu)
     base = config["resume_checkpoint"]["completed_updates"]
     status = {
         "state": "starting",
@@ -49,6 +56,13 @@ def main():
             manifest["docker_command"], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT
         )
         while process.poll() is None:
+            ready = root / "results/gpu-contexts-ready.json"
+            if ready.exists() and config.get("reservation_containers") and not status.get("gpu_handoff_completed"):
+                for name in config["reservation_containers"]:
+                    info = json.loads(subprocess.check_output(["docker", "inspect", name], text=True))[0]
+                    assert info["Config"]["Labels"].get("lab.nvfp4-reservation") == "20261025"
+                    subprocess.run(["docker", "stop", "--timeout", "5", name], check=True)
+                status["gpu_handoff_completed"] = True
             path = root / "results/status.json"
             if path.exists():
                 runtime = json.loads(path.read_text())

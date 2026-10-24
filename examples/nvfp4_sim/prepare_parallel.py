@@ -17,6 +17,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--gpus", type=int, nargs=4, default=[0, 1, 6, 7])
     parser.add_argument("--dp-validation", type=Path, required=True)
+    parser.add_argument("--reservations", nargs="*", default=[])
     parser.add_argument("--preflight", action="store_true")
     args = parser.parse_args()
     output = args.output.resolve()
@@ -44,6 +45,18 @@ def main():
         ).strip()
         for gpu in args.gpus
     ]
+    if args.reservations:
+        allowed = []
+        for name in args.reservations:
+            info = json.loads(subprocess.check_output(["docker", "inspect", name], text=True))[0]
+            assert info["Config"]["Labels"].get("lab.nvfp4-reservation") == "20261025"
+            rows = subprocess.check_output(["docker", "top", name, "-eo", "pid"], text=True).splitlines()[1:]
+            allowed.extend(int(row.strip()) for row in rows if row.strip())
+        config.update(
+            reservation_host_pids=allowed,
+            reservation_containers=args.reservations,
+            gpu_allocation_managed_by_sequence=True,
+        )
     config["training"].update(gpu_count=4, data_parallel_size=4, save_every_updates=1, checkpoint_policy="best-last")
     config["environment"].update(CUDA_VISIBLE_DEVICES="0,1,2,3", TENSORBOARD_DIR="/nvfp4-run/results/tensorboard")
     command = config["training_command"]
@@ -102,6 +115,8 @@ def main():
         (output / path).mkdir(parents=True, exist_ok=True)
     manifest = json.loads((args.template / "manifest.json").read_text())
     docker = manifest["docker_command"]
+    if args.reservations:
+        docker[docker.index("/study/scripts/run_online_training.py")] = "/quant/examples/nvfp4_sim/run_reserved.py"
     docker[docker.index("--gpus") + 1] = '"device=' + ",".join(config["assigned_gpu_uuids"]) + '"'
     for index, token in enumerate(docker):
         if token == "--mount" and "dst=/nvfp4-run" in docker[index + 1].split(","):
