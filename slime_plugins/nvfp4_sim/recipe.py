@@ -87,7 +87,7 @@ class NVFP4Tensor:
 
 
 @torch.no_grad()
-def quantize(tensor, *, weight=False, stochastic=False, generator=None):
+def quantize(tensor, *, weight=False, stochastic=False, generator=None, reference_arithmetic=True):
     """Quantize a matrix with current tensor amax, 1x16 or 16x16 blocks."""
     if tensor.ndim != 2 or tensor.dtype not in (torch.bfloat16, torch.float16, torch.float32):
         raise ValueError("NVFP4 simulation expects a BF16/FP16/FP32 matrix")
@@ -106,11 +106,19 @@ def quantize(tensor, *, weight=False, stochastic=False, generator=None):
         amax = blocks.abs().amax(-1)
     # Match TE's finite encode-scale clamping, including zero and tiny tensors.
     limit = torch.finfo(torch.float32).max
-    global_encode = (2688.0 / x.abs().amax()).clamp_max(limit)
+    if reference_arithmetic:
+        # Tensor.__rtruediv__ may lower a scalar/tensor division to reciprocal
+        # followed by multiplication. TE's reference uses an explicit div;
+        # the one-ULP difference can cross E4M3 rounding ties on real activations.
+        global_encode = torch.div(x.new_tensor(2688.0), x.abs().amax()).clamp_max(limit)
+    else:
+        global_encode = (2688.0 / x.abs().amax()).clamp_max(limit)
     global_encode = torch.where(global_encode == 0, torch.ones_like(global_encode), global_encode)
-    global_decode = global_encode.reciprocal()
-    scales = round_e4m3((amax * (global_encode * (1.0 / 6.0))).clamp_max(limit))
-    encode = (scales * global_decode).reciprocal().clamp_max(limit)
+    global_decode = torch.div(torch.ones_like(global_encode), global_encode) if reference_arithmetic else global_encode.reciprocal()
+    reciprocal_six = torch.reciprocal(x.new_tensor(6.0)) if reference_arithmetic else 1.0 / 6.0
+    scales = round_e4m3((amax * (global_encode * reciprocal_six)).clamp_max(limit))
+    denominator = scales * global_decode
+    encode = (torch.div(torch.ones_like(denominator), denominator) if reference_arithmetic else denominator.reciprocal()).clamp_max(limit)
     payload = round_e2m1(blocks * encode[..., None], stochastic, generator)
     return NVFP4Tensor(payload.reshape_as(x).to(torch.bfloat16), scales, global_decode, (rows, columns), weight)
 
@@ -163,6 +171,11 @@ class NVFP4Recipe:
     weight_2d: bool = True
     chunk_blocks: int = 8
     counters: Counter = field(default_factory=Counter)
+    # Optional independent stream for frozen diagnostic replays. Normal training
+    # keeps using PyTorch's default CUDA RNG, exactly as before.
+    stochastic_generator: object = field(default=None, repr=False, compare=False)
+    # False is an explicit compatibility arm for the already-completed baseline.
+    reference_arithmetic: bool = True
 
     def record(self, path):
         self.counters[path] += 1
@@ -181,8 +194,8 @@ class _NVFP4Linear(torch.autograd.Function):
         if x.dtype != torch.bfloat16 or weight.dtype != torch.bfloat16:
             raise ValueError("The default NVFP4 training simulation requires BF16 parameters and inputs")
         matrix = x.reshape(-1, x.shape[-1])
-        qw = quantize(weight, weight=recipe.weight_2d)
-        qx = quantize(matrix)
+        qw = quantize(weight, weight=recipe.weight_2d, reference_arithmetic=recipe.reference_arithmetic)
+        qx = quantize(matrix, reference_arithmetic=recipe.reference_arithmetic)
         output = gemm(qx, qw, chunk_blocks=recipe.chunk_blocks)
         if bias is not None:
             output.add_(bias.float())
@@ -202,17 +215,19 @@ class _NVFP4Linear(torch.autograd.Function):
         g = grad_output.reshape(-1, grad_output.shape[-1]).to(torch.bfloat16)
         dx = dw = db = None
         if ctx.needs_input_grad[0]:
-            qg = quantize(g, stochastic=recipe.stochastic_rounding)
+            qg = quantize(g, stochastic=recipe.stochastic_rounding, generator=recipe.stochastic_generator,
+                          reference_arithmetic=recipe.reference_arithmetic)
             # Quantize the original high precision transpose, never a 1D QDQ result.
-            qwt = quantize(weight.T.contiguous(), weight=recipe.weight_2d)
+            qwt = quantize(weight.T.contiguous(), weight=recipe.weight_2d, reference_arithmetic=recipe.reference_arithmetic)
             dx = gemm(qg, qwt, chunk_blocks=recipe.chunk_blocks).to(x.dtype).reshape(ctx.input_shape)
             recipe.record("dgrad")
             if recipe.stochastic_rounding:
                 recipe.record("sr_dgrad")
         if ctx.needs_input_grad[1]:
             xt, gt = recipe.backward_operands(x, g)
-            qxt = quantize(xt)
-            qgt = quantize(gt, stochastic=recipe.stochastic_rounding)
+            qxt = quantize(xt, reference_arithmetic=recipe.reference_arithmetic)
+            qgt = quantize(gt, stochastic=recipe.stochastic_rounding, generator=recipe.stochastic_generator,
+                           reference_arithmetic=recipe.reference_arithmetic)
             dw = gemm(qgt, qxt, chunk_blocks=recipe.chunk_blocks)
             recipe.record("wgrad")
             if recipe.stochastic_rounding:

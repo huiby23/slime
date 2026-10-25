@@ -252,6 +252,47 @@ network namespaces. Each job writes its own status, predictions and results.
 Pending final-checkpoint jobs wait until a complete step-100 snapshot is frozen
 and exported; they never modify the ongoing formal run.
 
+The second diagnostic round is prepared with `prepare_diagnostic_phase2.py
+<new-directory> --prior <first-round-directory>`. It reuses frozen artifacts
+through a read-only mount. Five inference arms share 64 predeclared validation
+indices: full W4A4, BF16, weights only, activations only, and W4A4 with a BF16
+output projection. The highest-accuracy ablation is automatically evaluated on
+all 512 rows; this includes the screening rows and is not an independent holdout.
+Completed-run diagnostic arms explicitly pin their arithmetic version so the
+paired comparisons remain valid.
+
+The eight-answer gradient probe compares resetting only the default seed,
+restoring Megatron's named RNG tracker, using a separate stochastic-rounding
+generator, and deterministic rounding as a diagnostic control. The subsequent
+deterministic probe also sets `NVTE_ALLOW_NONDETERMINISTIC_ALGO=0`,
+`CUBLAS_WORKSPACE_CONFIG=:4096:8` and PyTorch deterministic algorithms before
+initializing CUDA/backends. The 64-answer TIS replay restores the tracker and independent SR stream and requires
+the identical-RNG gradient repeat to agree within relative L2 1e-5. A failed
+reproducibility check is a failed diagnostic, never evidence that TIS helps.
+
+`alignment_diagnostic.py` compares fixed step-75 weights and teacher-forced
+tokens across Megatron and SGLang. It canonicalizes grouped QKV ordering,
+checks weight hashes, records selected projections in layers 0/13/27, compares
+weight caching and serial/batched requests, and probes growing cached prefixes.
+Quantization of sampled real activations and weights is checked against the
+pinned NVIDIA software reference. Prefix-extension checks are not a full
+free-running decode accuracy experiment. All these jobs perform zero optimizer
+updates. One failed phase-two job does not stop independent jobs; dependent jobs
+are blocked visibly. Jobs can be added only after CPU preflight has passed.
+
+The real-activation audit found a division-order difference in the original
+simulator: scalar reverse division can become reciprocal then multiplication.
+For global amax 10, its encode scale is 268.8000183105469 rather than the
+reference's 268.79998779296875. A block amax of .9375 then rounds to E4M3 scale
+44 rather than 40. The corrected default uses explicit `torch.div`, matching
+TE's software-reference operation order. Set `nvfp4_sim_reference_arithmetic:
+false` (or `NVFP4Recipe(reference_arithmetic=False)`) only to replay the original
+experiment. Frozen phase-two legacy comparisons set this flag explicitly;
+separate corrected inference arms use true. The existing step-100 weights were
+trained before this correction; corrected inference does not retroactively make
+them a corrected-training run. Matching sampled software-reference tensors does
+not establish native hardware bitwise equivalence.
+
 The CPU suite compares E2M1/E4M3 quantization and RHT with the NVIDIA reference
 installed in the pinned baseline image (Transformer Engine 2.18.0). It also checks
 ties, saturation, zero blocks, padding, transposes, stochastic rounding, both

@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import os
+import random
 from pathlib import Path
 import socket
 import subprocess
@@ -80,20 +81,22 @@ def prepare_data(job):
     assert len(payload['samples'])==64
     # Reassemble all four training partitions into the same global batch for a
     # single-GPU diagnostic. Saved rewards, masks, advantages and old probs stay fixed.
-    ordered=sorted(payload['samples'],key=lambda row:row['rollout_position'])
-    layout={'partition':list(range(64)), 'num_microbatches':[64], 'global_batch_sizes':[64],
+    positions=job.get('replay_positions',list(range(64)))
+    assert positions and len(set(positions))==len(positions) and all(0<=p<64 for p in positions)
+    ordered=[next(row for row in payload['samples'] if row['rollout_position']==p) for p in positions]
+    count=len(ordered)
+    layout={'partition':positions, 'num_microbatches':[count], 'global_batch_sizes':[64],
             'sample_indices':[row['sample_index'] for row in ordered],
-            'micro_batch_indices':[[i] for i in range(64)]}
-    by_position={sample['rollout_position']:sample for sample in payload['samples']}
-    assert set(by_position)==set(range(64))
-    keys=set(by_position[0])-{'data_parallel_rank','sample_index','rollout_position'}
+            'micro_batch_indices':[[i] for i in range(count)]}
+    by_position={sample['rollout_position']:sample for sample in ordered}
+    keys=set(ordered[0])-{'data_parallel_rank','sample_index','rollout_position'}
     data={key:[by_position[position][key] for position in layout['partition']] for key in keys}
     data['partition']=layout['partition']
     data['sample_indices']=layout['sample_indices']
     data['micro_batch_indices']=layout['micro_batch_indices']
     data['num_microbatches']=layout['num_microbatches']
     data['global_batch_sizes']=layout['global_batch_sizes']
-    assert len(layout['partition'])==64 and len(layout['micro_batch_indices'])==64
+    assert len(layout['partition'])==count and len(layout['micro_batch_indices'])==count
     for row in payload['samples']:
         assert len(row['tokens'])==row['total_lengths']
         assert len(row['log_probs'])==len(row['rollout_log_probs'])==len(row['loss_masks'])==row['response_lengths']
@@ -107,6 +110,13 @@ def main():
     cli=parser.parse_args()
     job=json.loads(cli.job.read_text());output=Path(job['container_run_dir'])
     output.mkdir(parents=True,exist_ok=True)
+    if job.get('deterministic_math',False):
+        os.environ['CUBLAS_WORKSPACE_CONFIG']=':4096:8'
+        os.environ['NVTE_ALLOW_NONDETERMINISTIC_ALGO']='0'
+        torch.use_deterministic_algorithms(True)
+        torch.backends.cudnn.benchmark=False
+        torch.backends.cudnn.deterministic=True
+        torch.backends.cuda.matmul.allow_tf32=False
     if not cli.check_only:
         # CPU preflight has already validated args. Acquire this process's CUDA context promptly,
         # so framework imports are visibly part of the experiment's GPU use.
@@ -143,6 +153,7 @@ def main():
         for subset in ['all','short' if row['response_lengths']<=256 else 'long']:
             counts[subset]['samples']+=1
             counts[subset]['nonzero_advantage_samples']+=int(active)
+    assert counts['all']['nonzero_advantage_samples'] > 0, 'A gradient diagnostic requires nonzero advantages.'
     if cli.check_only:
         save_json(output/'configuration-check.json',{'passed':True,'counts':counts,'checkpoint':args.load,
             'rollout_id':job['rollout_id'],'bf16':args.bf16,'optimizer_will_be_created':False})
@@ -150,7 +161,8 @@ def main():
         return
     status={'state':'initializing','started_at_utc':datetime.now(timezone.utc).isoformat(),
         'job_id':job['job_id'],'rollout_id':job['rollout_id'],'optimizer_steps':0,
-        'sample_counts':counts,'gpu_uuid':actual,'cases':{}}
+        'sample_counts':counts,'gpu_uuid':actual,'cases':{},
+        'deterministic_math':job.get('deterministic_math',False)}
     save_json(output/'status.json',status)
     import torch.distributed as dist
     from megatron.core import mpu
@@ -188,20 +200,42 @@ def main():
             'loss_masks','log_probs','ref_log_probs','values','advantages','returns','rollout_log_probs',
             'rollout_topk_token_ids','rollout_topk_log_probs','rollout_top_p_log_probs','teacher_log_probs',
             'rollout_mask_sums','partition']
+        from megatron.core.tensor_parallel.random import get_cuda_rng_tracker
+        tracker=get_cuda_rng_tracker()
+        def clone_states(states):
+            return {k:(v.clone_state() if isinstance(v,torch.Generator) else v.clone()) for k,v in states.items()}
+        initial_tracker=clone_states(tracker.get_states())
+        status['rng_tracker_names']=list(initial_tracker)
+        recipes={id(getattr(module,'_nvfp4_recipe')):module._nvfp4_recipe
+                 for root in model for module in root.modules() if hasattr(module,'_nvfp4_recipe')}
         references={}
-        cases=[('all','baseline',1042),('all','repeat_same_rng',1042),
-               ('all','repeat_other_rng',1043),('all','tis',1042)]
-        for subset,method,replay_seed in cases:
+        cases=job.get('replay_cases',[
+            {'name':'all_baseline','reference_group':'all','seed':1042,'reference':True},
+            {'name':'all_repeat_same_rng','reference_group':'all','seed':1042,'require_repeat':True},
+            {'name':'all_repeat_other_rng','reference_group':'all','seed':1043},
+            {'name':'all_tis','reference_group':'all','seed':1042,'tis':True},
+        ])
+        for case in cases:
+            name=case['name'];group=case['reference_group'];replay_seed=case.get('seed',1042)
+            random.seed(replay_seed)
+            import numpy as np
+            np.random.seed(replay_seed)
             torch.manual_seed(replay_seed)
             torch.cuda.manual_seed_all(replay_seed)
-            status['state']='computing_gradients';status['current_case']=subset+'_'+method
+            if case.get('restore_tracker',True):
+                tracker.set_states(clone_states(initial_tracker))
+            generator=(torch.Generator(device='cuda').manual_seed(replay_seed)
+                       if case.get('independent_sr',True) else None)
+            for recipe in recipes.values():
+                recipe.stochastic_generator=generator
+                recipe.stochastic_rounding=case.get('stochastic_rounding',True)
+            status['state']='computing_gradients';status['current_case']=name
             save_json(output/'status.json',status)
-            args.use_tis=method=='tis'
+            args.use_tis=case.get('tis',False)
             args.use_rs=False;args.tis_mode='truncate';args.tis_upper_bound=2.;args.tis_batch_normalize=False
             for module in model:
                 module.zero_grad(set_to_none=True);module.zero_grad_buffer()
-            data['advantages']=[adv if subset=='all' or (length<=256)==(subset=='short') else torch.zeros_like(adv)
-                for adv,length in zip(originals,data['response_lengths'],strict=True)]
+            data['advantages']=[adv.clone() for adv in originals]
             # Keep original masks and global-batch normalization when isolating a length group's contribution.
             iterator=[DataIterator(data,data['micro_batch_indices'])]
             completed_microbatches=0
@@ -215,30 +249,34 @@ def main():
                 if completed_microbatches%16==0:
                     status['completed_microbatches']=completed_microbatches
                     save_json(output/'status.json',status)
-                    print('FORWARD_PROGRESS',subset,method,completed_microbatches,'/64',flush=True)
+                    print('FORWARD_PROGRESS',name,completed_microbatches,'/',len(by_position),flush=True)
                 return logits,partial(loss_function,args,batch,64,64)
             enable_log_prob_capture()
             get_forward_backward_func()(forward_step_func=forward_step,data_iterator=iterator,model=model,
-                num_microbatches=64,seq_length=args.seq_length,micro_batch_size=1,
+                num_microbatches=len(by_position),seq_length=args.seq_length,micro_batch_size=1,
                 decoder_seq_length=args.decoder_seq_length,forward_only=False)
             torch.cuda.synchronize()
-            captured=drain_captured_log_probs();assert set(captured)==set(range(64))
+            captured=drain_captured_log_probs();assert set(captured)==set(by_position)
             max_error=max((captured[p].cpu()-expected_logprobs[p]).abs().max().item() for p in captured)
             gradients=capture_gradients(params)
-            comparison=gradient_metrics(gradients,references.get(subset))
+            comparison=gradient_metrics(gradients,references.get(group))
             comparison['max_recomputed_logprob_error']=max_error
             comparison['peak_device_memory_bytes']=torch.cuda.max_memory_allocated()
             assert max_error<.01, 'Replayed model probabilities differ from the saved trainer snapshot.'
-            if subset=='all' and method=='baseline':
+            if len(by_position)==64 and case.get('reference',False):
                 comparison['original_run_grad_norm']=job['expected_grad_norm']
                 comparison['grad_norm_relative_error']=abs(comparison['norm']/job['expected_grad_norm']-1)
                 # DP=4 to DP=1 changes the SR streams. The paired-RNG repeat is
                 # the reproducibility control; source norm is reported, not asserted.
-            status['cases'][subset+'_'+method]=comparison
+            comparison['rng_control']=case
+            status['cases'][name]=comparison
             save_json(output/'status.json',status)
-            print('GRADIENT_CASE',subset,method,json.dumps({key:value for key,value in comparison.items() if key!='parameter_gradient_norms'}),flush=True)
-            if method=='baseline':
-                references[subset]=gradients
+            print('GRADIENT_CASE',name,json.dumps({key:value for key,value in comparison.items() if key!='parameter_gradient_norms'}),flush=True)
+            if case.get('require_repeat',False):
+                comparison['repeat_passed']=comparison['relative_l2_difference']<=job.get('repeat_tolerance',1e-5)
+                assert comparison['repeat_passed'], 'Controlled gradient replay failed reproducibility: '+name
+            if case.get('reference',False):
+                references[group]=gradients
             else:
                 del gradients
         assert parameter_hash(params)==fingerprint, 'Weights changed during a gradient-only replay.'

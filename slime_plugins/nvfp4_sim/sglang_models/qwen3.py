@@ -11,9 +11,11 @@ from ..recipe import NVFP4Recipe, gemm, quantize
 
 
 class NVFP4SimLinearMethod(UnquantizedLinearMethod):
-    def __init__(self, recipe, cache_weights=False):
+    def __init__(self, recipe, cache_weights=False, quantize_weights=True, quantize_activations=True):
         self.recipe = recipe
         self.cache_weights = cache_weights
+        self.quantize_weights = quantize_weights
+        self.quantize_activations = quantize_activations
         self.invalidate_weight_cache()
 
     def invalidate_weight_cache(self):
@@ -25,7 +27,8 @@ class NVFP4SimLinearMethod(UnquantizedLinearMethod):
         # Activations are quantized every call. Optional cached weight casts are
         # invalidated after stock loading and both baseline update APIs.
         with torch.no_grad():
-            qx = quantize(x.reshape(-1, x.shape[-1]))
+            matrix = x.reshape(-1, x.shape[-1])
+            qx = quantize(matrix, reference_arithmetic=self.recipe.reference_arithmetic) if self.quantize_activations else None
             try:
                 version = layer.weight._version
             except RuntimeError:  # Inference tensors intentionally have no version counter.
@@ -38,13 +41,22 @@ class NVFP4SimLinearMethod(UnquantizedLinearMethod):
                 layer.weight.dtype,
                 tuple(layer.weight.shape),
             )
-            if not self.cache_weights or key != self._weight_key:
-                qw = quantize(layer.weight, weight=True)
+            if not self.quantize_weights:
+                qw = None
+            elif not self.cache_weights or key != self._weight_key:
+                qw = quantize(layer.weight, weight=True, reference_arithmetic=self.recipe.reference_arithmetic)
                 if self.cache_weights:
                     self._weight_key, self._weight_cache = key, qw
             else:
                 qw = self._weight_cache
-            output = gemm(qx, qw, chunk_blocks=self.recipe.chunk_blocks)
+            if qx is not None and qw is not None:
+                output = gemm(qx, qw, chunk_blocks=self.recipe.chunk_blocks)
+            else:
+                # Diagnostic W4A16 / W16A4 arms. Never used by the default
+                # W4A4 path; dequantized operands remain FP32 before GEMM.
+                left = qx.dequantize() if qx is not None else matrix.float()
+                right = qw.dequantize() if qw is not None else layer.weight.float()
+                output = left @ right.T
             if bias is not None:
                 output.add_(bias.float())
             self.recipe.record("fprop")
@@ -54,8 +66,8 @@ class NVFP4SimLinearMethod(UnquantizedLinearMethod):
 class NVFP4SimEmbeddingLinearMethod(UnquantizedEmbeddingMethod):
     """Use BF16 embedding lookup and NVFP4 output projection on the same weight."""
 
-    def __init__(self, recipe, cache_weights=False):
-        NVFP4SimLinearMethod.__init__(self, recipe, cache_weights)
+    def __init__(self, recipe, cache_weights=False, quantize_weights=True, quantize_activations=True):
+        NVFP4SimLinearMethod.__init__(self, recipe, cache_weights, quantize_weights, quantize_activations)
 
     apply = NVFP4SimLinearMethod.apply
     invalidate_weight_cache = NVFP4SimLinearMethod.invalidate_weight_cache
@@ -68,7 +80,7 @@ class NVFP4SimQwen3ForCausalLM(Qwen3ForCausalLM):
             raise ValueError("The baseline NVFP4 rollout simulation requires TP=PP=1")
         if getattr(self, "quant_config", None) is not None:
             raise ValueError("NVFP4 simulation loads original BF16 weights; disable native quantization")
-        recipe = NVFP4Recipe()
+        recipe = NVFP4Recipe(reference_arithmetic=getattr(config, "nvfp4_sim_reference_arithmetic", True))
         names = []
         selected = ("qkv_proj", "o_proj", "gate_up_proj", "down_proj", "lm_head")
         include_head = getattr(config, "nvfp4_sim_include_output_layer", True)
@@ -88,7 +100,11 @@ class NVFP4SimQwen3ForCausalLM(Qwen3ForCausalLM):
                 if isinstance(module.quant_method, UnquantizedEmbeddingMethod)
                 else NVFP4SimLinearMethod
             )
-            module.quant_method = method_cls(recipe, cache_weights=getattr(config, "nvfp4_sim_weight_cache", False))
+            module.quant_method = method_cls(
+                recipe, cache_weights=getattr(config, "nvfp4_sim_weight_cache", False),
+                quantize_weights=getattr(config, "nvfp4_sim_quantize_weights", True),
+                quantize_activations=getattr(config, "nvfp4_sim_quantize_activations", True),
+            )
             names.append(name)
         expected = config.num_hidden_layers * 4 + int(include_head)
         if len(names) != expected:

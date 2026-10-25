@@ -187,6 +187,23 @@ def test_inference_cache_preserves_values_and_reuses_only_weight_casts():
     torch.testing.assert_close(updated, nvfp4_linear(x, layer.weight, recipe=NVFP4Recipe()), rtol=0, atol=0)
 
 
+@pytest.mark.parametrize("quantize_weights,quantize_activations", [(True, False), (False, True)])
+def test_single_operand_ablation_uses_only_the_requested_quantizer(quantize_weights, quantize_activations):
+    pytest.importorskip("sglang")
+    from slime_plugins.nvfp4_sim.sglang_models import qwen3
+
+    layer = SimpleNamespace(weight=torch.randn(48, 32).bfloat16())
+    x = torch.randn(19, 32).bfloat16()
+    method = qwen3.NVFP4SimLinearMethod(NVFP4Recipe(), cache_weights=True,
+                                      quantize_weights=quantize_weights, quantize_activations=quantize_activations)
+    with patch.object(qwen3, "quantize", wraps=qwen3.quantize) as quantizer:
+        actual = method.apply(layer, x)
+        assert quantizer.call_count == 1
+    left = qwen3.quantize(x).dequantize() if quantize_activations else x.float()
+    right = qwen3.quantize(layer.weight, weight=True).dequantize() if quantize_weights else layer.weight.float()
+    torch.testing.assert_close(actual, (left @ right.T).bfloat16(), rtol=0, atol=0)
+
+
 def test_model_loader_invalidates_cache_even_for_data_writes():
     pytest.importorskip("sglang")
     from slime_plugins.nvfp4_sim.sglang_models import qwen3

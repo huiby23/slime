@@ -106,5 +106,6 @@ def model_provider(pre_process=True, post_process=True, vp_stage=None):
     base_args.custom_model_provider_path = None
     provider = _get_model_provider_func(base_args)
     model = provider(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
-    recipe = NVFP4Recipe(chunk_blocks=getattr(args, "nvfp4_sim_chunk_blocks", 8))
+    recipe = NVFP4Recipe(chunk_blocks=getattr(args, "nvfp4_sim_chunk_blocks", 8),
+                        reference_arithmetic=getattr(args, "nvfp4_sim_reference_arithmetic", True))
     return install(model, recipe, include_output_layer=getattr(args, "nvfp4_sim_include_output_layer", True))

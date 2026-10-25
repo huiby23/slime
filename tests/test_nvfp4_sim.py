@@ -21,6 +21,40 @@ from slime_plugins.nvfp4_sim.recipe import (
 NUM_GPUS = 0
 
 
+def test_diagnostic_sr_generator_is_independent_of_default_rng():
+    x = torch.randn(19, 32).bfloat16().requires_grad_()
+    weight = torch.randn(48, 32).bfloat16().requires_grad_()
+    gradients = []
+    for seed in [17, 913]:
+        torch.manual_seed(seed)
+        generator = torch.Generator(device="cpu").manual_seed(42)
+        recipe = NVFP4Recipe(stochastic_generator=generator)
+        output = nvfp4_linear(x, weight, recipe=recipe)
+        gradients.append(torch.autograd.grad(output.float().square().mean(), (x, weight)))
+    for first, second in zip(*gradients, strict=True):
+        torch.testing.assert_close(first, second, rtol=0, atol=0)
+
+
+def test_grouped_qkv_trace_conversion_preserves_projection():
+    from slime_plugins.nvfp4_sim.diagnostic_trace import canonical_qkv
+
+    x = torch.randn(3, 1024)
+    weight = torch.randn(4096, 1024)
+    actual = canonical_qkv(x @ weight.T)
+    expected = x @ canonical_qkv(weight, weight=True).T
+    torch.testing.assert_close(actual, expected, rtol=2e-4, atol=2e-5)
+
+
+def test_real_activation_scale_tie_uses_reference_division():
+    x = torch.zeros(32, 32, dtype=torch.bfloat16)
+    x[0, 0] = 10.0
+    x[1, :16] = .9375
+    corrected = quantize(x)
+    legacy = quantize(x, reference_arithmetic=False)
+    assert corrected.scales[1, 0] == 40
+    assert legacy.scales[1, 0] == 44
+
+
 @pytest.mark.parametrize("sign", [1, -1])
 def test_e2m1_ties_even_and_saturation(sign):
     x = torch.tensor([0, 0.25, 0.5, 0.75, 1.25, 1.75, 2.5, 3.5, 5, 6, 100.0]) * sign

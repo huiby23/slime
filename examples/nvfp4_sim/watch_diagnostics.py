@@ -52,6 +52,39 @@ def docker_command(template, name, gpu_uuid, job_id, script):
     return command
 
 
+def promote_screen(root, plan, status):
+    """Confirm one predeclared screening winner on all 512 validation rows."""
+    spec = plan.get("screen_promotion")
+    if not spec or (root / "screen-promotion.json").exists():
+        return
+    candidates = spec["candidate_jobs"]
+    if not all(status["jobs"][name]["state"] == "completed" for name in candidates):
+        return
+    scores = {name: json.loads((root / "jobs" / name / "evaluation.json").read_text())["accuracy"]
+              for name in candidates}
+    winner = max(candidates, key=lambda name: scores[name])
+    config = json.loads((root / "jobs" / winner / "job.json").read_text())
+    job_id = spec["confirmation_job_id"]
+    output = root / "jobs" / job_id
+    output.mkdir(exist_ok=False)
+    config.update(job_id=job_id, output="/diagnostic/jobs/" + job_id)
+    config.pop("dataset_indices", None)
+    save(output / "job.json", config)
+    with (output / "preflight.log").open("w") as log:
+        subprocess.run(["docker", "exec", plan["cpu_container"], "python3",
+                        "/quant/examples/nvfp4_sim/evaluate_diagnostic.py",
+                        "/diagnostic/jobs/" + job_id + "/job.json", "--preflight"],
+                       stdout=log, stderr=subprocess.STDOUT, check=True)
+    job = {"job_id": job_id, "kind": "evaluation",
+           "script": "/quant/examples/nvfp4_sim/evaluate_diagnostic.py"}
+    plan["jobs"].append(job)
+    save(root / "plan.json", plan)
+    status["jobs"][job_id] = {"state": "queued", "kind": "evaluation"}
+    save(root / "screen-promotion.json", {"winner": winner, "screen_accuracies": scores,
+         "confirmation_job": job_id, "rule": "highest accuracy; ties use declared candidate order",
+         "note": "The 64 screening rows are included in 512; confirmation is descriptive, not an independent holdout."})
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
@@ -76,6 +109,12 @@ def main():
     signal.signal(signal.SIGINT, stop)
     try:
         while not stopping:
+            # New diagnostics may be added only after their CPU preflight passes.
+            plan = json.loads((root / "plan.json").read_text())
+            for job in plan["jobs"]:
+                if job["job_id"] not in status["jobs"]:
+                    assert json.loads((root / "jobs" / job["job_id"] / "configuration-check.json").read_text())["passed"]
+                    status["jobs"][job["job_id"]] = {"state": "queued", "kind": job["kind"]}
             formal = Path(plan["formal_run"])
             policy = json.loads((formal / "results/checkpoints/checkpoint-policy.json").read_text())
             if policy["last"]["completed_updates"] >= 100 and not (root / "hf/nvfp4-step100/export-validation.json").exists():
@@ -106,6 +145,9 @@ def main():
                     continue
                 log.close()
                 record = status["jobs"][job_id]
+                child_path = root / "jobs" / job_id / "status.json"
+                if child_path.exists():
+                    record["progress"] = json.loads(child_path.read_text())
                 if process.returncode == 75:
                     record.update(state="queued", reason="GPU became busy before CUDA initialization")
                 else:
@@ -113,17 +155,29 @@ def main():
                                   exit_code=process.returncode, finished_at=time.time())
                 del running[job_id]
                 if record["state"] == "failed":
-                    status.update(state="failed", error="Diagnostic job failed: " + job_id, updated_at=time.time())
-                    save(root / "status.json", status)
-                    raise RuntimeError(status["error"])
+                    if plan.get("stop_on_job_failure", True):
+                        status.update(state="failed", error="Diagnostic job failed: " + job_id, updated_at=time.time())
+                        save(root / "status.json", status)
+                        raise RuntimeError(status["error"])
+                    status.setdefault("job_errors", []).append(job_id)
+            promote_screen(root, plan, status)
             available = free_gpus(reservations)
+            if "physical_gpu_allowlist" in plan:
+                available = [gpu for gpu in available if gpu[0] in plan["physical_gpu_allowlist"]]
             active_gpus = {status["jobs"][key]["physical_gpu"] for key in running}
             available = [gpu for gpu in available if gpu[0] not in active_gpus]
             for job in plan["jobs"]:
                 record = status["jobs"][job["job_id"]]
                 if record["state"] != "queued":
                     continue
+                if len(running) >= plan.get("max_concurrent_jobs", 8):
+                    break
                 if job.get("export_dependency") and not (root / job["export_dependency"]).exists():
+                    dependency_parts = Path(job["export_dependency"]).parts
+                    if len(dependency_parts) > 1 and dependency_parts[0] == "jobs" and status["jobs"].get(
+                            dependency_parts[1], {}).get("state") in ("failed", "blocked"):
+                        record.update(state="blocked", reason="dependency failed: " + dependency_parts[1])
+                        continue
                     record["reason"] = "waiting for frozen model export"
                     continue
                 if not available:
@@ -145,6 +199,8 @@ def main():
             unfinished = any(v["state"] in ("queued", "running") for v in status["jobs"].values())
             status.update(state="running" if running else ("waiting_for_idle_gpu" if unfinished else "completed"),
                           updated_at=time.time())
+            if not unfinished and status.get("job_errors"):
+                status["state"] = "completed_with_failures"
             save(root / "status.json", status)
             if not unfinished:
                 break

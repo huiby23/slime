@@ -23,6 +23,9 @@ def prepare(job):
     with source.open() as stream:
         data = [json.loads(line) for line in stream if line.strip()]
     assert len(data) == 512
+    indices = job.get("dataset_indices", list(range(512)))
+    assert indices and len(set(indices)) == len(indices) and all(0 <= i < 512 for i in indices)
+    data = [dict(data[i], diagnostic_dataset_index=i) for i in indices]
     tokenizer = AutoTokenizer.from_pretrained(job["origin"], local_files_only=True)
     ids = [tokenizer.apply_chat_template(row["prompt"], tokenize=True, return_dict=False, add_generation_prompt=True,
                                        enable_thinking=False) for row in data]
@@ -35,9 +38,11 @@ def prepare(job):
                   attention_backend="flashinfer", disable_prefill_cuda_graph=True,
                   disable_decode_cuda_graph=True, skip_server_warmup=True, log_level="warning")
     if job["precision"] == "nvfp4":
-        kwargs["json_model_override_args"] = json.dumps({
+        override = {
             "architectures": ["NVFP4SimQwen3ForCausalLM"], "nvfp4_sim_weight_cache": True,
-        })
+        }
+        override.update(job.get("model_overrides", {}))
+        kwargs["json_model_override_args"] = json.dumps(override)
     return data, ids, kwargs, hashlib.sha256(source.read_bytes()).hexdigest()
 
 
@@ -54,7 +59,7 @@ async def evaluate(engine, data, ids, output, status):
             meta = response["meta_info"]
             finish = meta.get("finish_reason", {})
             finish_type = finish.get("type") if isinstance(finish, dict) else str(finish)
-            return {"index": index, "source_index": data[index]["metadata"]["source_index"],
+            return {"index": data[index]["diagnostic_dataset_index"], "source_index": data[index]["metadata"]["source_index"],
                     "label": data[index]["label"], "text": text,
                     "correct": bool(grade_answer_verl(text, data[index]["label"])),
                     "response_tokens": meta["completion_tokens"], "truncated": finish_type == "length"}
@@ -97,7 +102,8 @@ def main():
     data, ids, kwargs, dataset_hash = prepare(job)
     report = {"passed": True, "questions": len(data), "dataset_sha256": dataset_hash,
               "thinking": False, "max_response_tokens": 1024, "precision": job["precision"],
-              "engine_kwargs": kwargs, "sampling": {"top_k": 1, "temperature": 1.0, "top_p": 1.0}}
+              "engine_kwargs": kwargs, "dataset_indices": [r["diagnostic_dataset_index"] for r in data],
+              "sampling": {"top_k": 1, "temperature": 1.0, "top_p": 1.0}}
     if args.preflight:
         from dataclasses import fields
         from sglang.srt.server_args import ServerArgs
@@ -113,16 +119,16 @@ def main():
     import sglang
 
     status = {"state": "loading_model", "job_id": job["job_id"], "completed_questions": 0,
-              "planned_questions": 512, "physical_gpu": job["physical_gpu"], "started_at": time.time()}
+              "planned_questions": len(data), "physical_gpu": job["physical_gpu"], "started_at": time.time()}
     save(output / "status.json", status)
     engine = None
     try:
         engine = sglang.Engine(**kwargs)
         rows = asyncio.run(evaluate(engine, data, ids, output, status))
         result = dict(report, correct=sum(x["correct"] for x in rows),
-                      accuracy=sum(x["correct"] for x in rows) / 512,
-                      truncated_ratio=sum(x["truncated"] for x in rows) / 512,
-                      mean_response_tokens=sum(x["response_tokens"] for x in rows) / 512,
+                      accuracy=sum(x["correct"] for x in rows) / len(data),
+                      truncated_ratio=sum(x["truncated"] for x in rows) / len(data),
+                      mean_response_tokens=sum(x["response_tokens"] for x in rows) / len(data),
                       wall_time_seconds=time.time() - status["started_at"])
         save(output / "evaluation.json", result)
         status.update(state="completed", successful_evaluation=True, result=result)
