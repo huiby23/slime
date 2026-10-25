@@ -112,6 +112,10 @@ def main():
                     record.update(state="completed" if process.returncode == 0 else "failed",
                                   exit_code=process.returncode, finished_at=time.time())
                 del running[job_id]
+                if record["state"] == "failed":
+                    status.update(state="failed", error="Diagnostic job failed: " + job_id, updated_at=time.time())
+                    save(root / "status.json", status)
+                    raise RuntimeError(status["error"])
             available = free_gpus(reservations)
             active_gpus = {status["jobs"][key]["physical_gpu"] for key in running}
             available = [gpu for gpu in available if gpu[0] not in active_gpus]
@@ -152,6 +156,12 @@ def main():
             subprocess.run(["docker", "stop", "--timeout", "30", name], check=True)
             process.wait()
             log.close()
+        for reservation in reservations.values():
+            inspected = subprocess.run(["docker", "inspect", reservation["container"]], capture_output=True, text=True)
+            if inspected.returncode == 0:
+                info = json.loads(inspected.stdout)[0]
+                assert info["Config"]["Labels"].get("lab.nvfp4-reservation") == "20261025"
+                subprocess.run(["docker", "stop", "--timeout", "5", reservation["container"]], check=True)
         if stopping:
             status.update(state="stopped", updated_at=time.time())
             save(root / "status.json", status)
