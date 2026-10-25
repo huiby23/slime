@@ -24,8 +24,9 @@ def prepare(job):
         data = [json.loads(line) for line in stream if line.strip()]
     assert len(data) == 512
     tokenizer = AutoTokenizer.from_pretrained(job["origin"], local_files_only=True)
-    ids = [tokenizer.apply_chat_template(row["prompt"], tokenize=True, add_generation_prompt=True,
+    ids = [tokenizer.apply_chat_template(row["prompt"], tokenize=True, return_dict=False, add_generation_prompt=True,
                                        enable_thinking=False) for row in data]
+    assert all(isinstance(tokens, list) and tokens and all(isinstance(token, int) for token in tokens) for tokens in ids)
     assert max(map(len, ids)) + 1024 <= 2048
     assert job["precision"] in ("bf16", "nvfp4")
     assert Path(job["model"]).joinpath("config.json").is_file() or job.get("allow_pending_model", False)
@@ -100,7 +101,12 @@ def main():
     if args.preflight:
         from dataclasses import fields
         from sglang.srt.server_args import ServerArgs
+        from sglang.srt.managers.io_struct import GenerateReqInput
         assert set(kwargs) <= {field.name for field in fields(ServerArgs)}
+        probe = GenerateReqInput(input_ids=ids[0], sampling_params={"top_k": 1, "max_new_tokens": 1024})
+        probe.normalize_batch_and_arguments()
+        assert probe.is_single
+        report["max_prompt_tokens"] = max(map(len, ids))
         save(output / "configuration-check.json", report)
         print(json.dumps(report), flush=True)
         return
