@@ -1,7 +1,7 @@
 """Observe real Megatron optimizer steps without changing gradients or updates.
 
-Enabled only by the training-smoke before-step hook. The FP32 witness is a whole
-optimizer-owned master tensor, not its rounded BF16 model copy. Records cover
+Enabled by the before-step hook. The FP32 witness is an optimizer-owned master
+tensor, or a bounded sample of a large local shard. Records cover
 one transformer projection's gradient, the global gradient norm, master deltas,
 and all seven NVFP4 recipe counters during each actual forward/backward step.
 """
@@ -19,16 +19,32 @@ logger = logging.getLogger(__name__)
 
 
 def _witness(optimizer):
+    fallback = None
     for group_id, group in enumerate(optimizer.param_groups):
         for param_id, parameter in enumerate(group["params"]):
-            if parameter.dtype == torch.float32 and 4096 <= parameter.numel() <= 8_000_000:
-                return parameter, {
+            if parameter.dtype == torch.float32 and parameter.numel() > 0:
+                description = {
                     "group": group_id,
                     "parameter": param_id,
                     "numel": parameter.numel(),
                     "dtype": str(parameter.dtype),
+                    "observed_numel": parameter.numel(),
                 }
-    raise RuntimeError("No medium-sized FP32 optimizer master parameter found")
+                if 4096 <= parameter.numel() <= 8_000_000:
+                    return parameter, description
+                if fallback is None or parameter.numel() > fallback[0].numel():
+                    fallback = parameter, description
+    if fallback is not None:
+        # DP ranks may own only a large embedding shard or small norm shards.
+        # Retain the actual master parameter and reread its sample after step().
+        parameter, description = fallback
+        description["observed_numel"] = min(parameter.numel(), 1_048_576)
+        return parameter, description
+    raise RuntimeError("No nonempty FP32 optimizer master parameter found")
+
+
+def _master_sample(context):
+    return context["master"].detach().reshape(-1)[: context["master_description"]["observed_numel"]]
 
 
 def before_train_step(args, rollout_id, step_id, models, optimizer, scheduler):
@@ -65,14 +81,14 @@ def before_train_step(args, rollout_id, step_id, models, optimizer, scheduler):
 
         def observed_step(self, *step_args, **step_kwargs):
             with torch.no_grad():
-                initial = context["master"].detach().clone()
+                initial = _master_sample(context).clone()
                 name, projection = context["projection"]
                 gradient = projection.main_grad
                 projection_finite = bool(torch.isfinite(gradient).all())
                 projection_norm = float(gradient.float().norm())
             outcome = original_step(*step_args, **step_kwargs)
             with torch.no_grad():
-                delta = context["master"].detach() - initial
+                delta = _master_sample(context) - initial
                 delta_finite = bool(torch.isfinite(delta).all())
                 delta_max = float(delta.abs().max())
                 delta_count = int(torch.count_nonzero(delta))

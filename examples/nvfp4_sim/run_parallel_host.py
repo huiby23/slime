@@ -84,9 +84,33 @@ def main():
         state="completed" if process.returncode == 0 and runtime.get("successful_training") else "failed",
         completed_updates=max(base, runtime.get("completed_updates", 0)),
         exit_code=process.returncode,
+        trainer_exit_code=runtime.get("trainer_exit_code"),
         finished_at=stamp(),
     )
     save(root / "status.json", status)
+    if status["state"] == "failed" and not stopping:
+        # Keep the user's assigned GPUs visible for recovery after a trainer
+        # failure. This retains contexts; it does not provide exclusive access.
+        name = "huibingyu-nvfp4-reserve-" + root.name
+        code = (
+            "import torch,time; "
+            "pins=[torch.empty(16*1024*1024,device=f'cuda:{i}',dtype=torch.float32) "
+            "for i in range(torch.cuda.device_count())]; "
+            "print('Training failed; GPU contexts retained for recovery',flush=True); "
+            "exec('while True: time.sleep(5)')"
+        )
+        command = [
+            "docker", "run", "-d", "--rm", "--init", "--name", name,
+            "--label", "lab.nvfp4-reservation=20261025", "--network", "none",
+            "--gpus", '"device=' + ",".join(config["assigned_gpu_uuids"]) + '"',
+            "--entrypoint", "python3", config["image_id"], "-u", "-c", code,
+        ]
+        try:
+            status["recovery_reservation_id"] = subprocess.check_output(command, text=True).strip()
+            status["recovery_reservation_container"] = name
+        except Exception as exc:
+            status["recovery_reservation_error"] = str(exc)
+        save(root / "status.json", status)
 
 
 if __name__ == "__main__":
