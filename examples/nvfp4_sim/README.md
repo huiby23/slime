@@ -226,6 +226,32 @@ without losing an update. The existing GPU actors are not killed to make a save.
 
 ## Validation
 
+### Quantization and mismatch diagnostics
+
+`export_diagnostic_hf.py` reads native distributed checkpoints on CPU and exports
+their trained model tensors with the pinned Qwen mapping. It requires exact HF
+parameter coverage, shapes, BF16 dtypes and tied embedding/head consistency; it
+does not fill missing trainable parameters from the initialization.
+
+`evaluate_diagnostic.py` evaluates frozen exports on the same 512 validation
+questions with thinking disabled, greedy top-k=1, a 1024-token response limit,
+TP=1 and at most 16 active requests. Cross BF16-trained and NVFP4-trained weights
+with BF16 and NVFP4 inference to separate training effects from inference effects.
+An initial BF16 control checks reproducibility against the existing baseline.
+
+`replay_diagnostic.py` reconstructs the saved 64-answer batch from four DP shards
+and performs no optimizer updates. It compares baseline gradients, a repeat with
+identical stochastic-rounding RNG, a repeat with different RNG, and TIS with the
+baseline RNG. Weights are hashed before and after. Gradient differences alone do
+not establish an accuracy benefit; an online TIS A/B remains a separate experiment.
+
+`watch_diagnostics.py <run-directory>` runs CPU-preflighted jobs on individually
+idle GPUs, checks occupancy again inside each job, and accepts only explicitly
+owned reservation PIDs during a reservation handoff. Containers use isolated
+network namespaces. Each job writes its own status, predictions and results.
+Pending final-checkpoint jobs wait until a complete step-100 snapshot is frozen
+and exported; they never modify the ongoing formal run.
+
 The CPU suite compares E2M1/E4M3 quantization and RHT with the NVIDIA reference
 installed in the pinned baseline image (Transformer Engine 2.18.0). It also checks
 ties, saturation, zero blocks, padding, transposes, stochastic rounding, both
