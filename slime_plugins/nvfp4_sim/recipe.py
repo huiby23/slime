@@ -87,7 +87,8 @@ class NVFP4Tensor:
 
 
 @torch.no_grad()
-def quantize(tensor, *, weight=False, stochastic=False, generator=None, reference_arithmetic=True):
+def quantize(tensor, *, weight=False, stochastic=False, generator=None, reference_arithmetic=True,
+             tensor_amax=None):
     """Quantize a matrix with current tensor amax, 1x16 or 16x16 blocks."""
     if tensor.ndim != 2 or tensor.dtype not in (torch.bfloat16, torch.float16, torch.float32):
         raise ValueError("NVFP4 simulation expects a BF16/FP16/FP32 matrix")
@@ -106,13 +107,14 @@ def quantize(tensor, *, weight=False, stochastic=False, generator=None, referenc
         amax = blocks.abs().amax(-1)
     # Match TE's finite encode-scale clamping, including zero and tiny tensors.
     limit = torch.finfo(torch.float32).max
+    global_amax = x.abs().amax() if tensor_amax is None else torch.as_tensor(tensor_amax, dtype=torch.float32, device=x.device)
     if reference_arithmetic:
         # Tensor.__rtruediv__ may lower a scalar/tensor division to reciprocal
         # followed by multiplication. TE's reference uses an explicit div;
         # the one-ULP difference can cross E4M3 rounding ties on real activations.
-        global_encode = torch.div(x.new_tensor(2688.0), x.abs().amax()).clamp_max(limit)
+        global_encode = torch.div(x.new_tensor(2688.0), global_amax).clamp_max(limit)
     else:
-        global_encode = (2688.0 / x.abs().amax()).clamp_max(limit)
+        global_encode = (2688.0 / global_amax).clamp_max(limit)
     global_encode = torch.where(global_encode == 0, torch.ones_like(global_encode), global_encode)
     global_decode = torch.div(torch.ones_like(global_encode), global_encode) if reference_arithmetic else global_encode.reciprocal()
     reciprocal_six = torch.reciprocal(x.new_tensor(6.0)) if reference_arithmetic else 1.0 / 6.0
