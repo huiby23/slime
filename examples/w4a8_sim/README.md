@@ -59,6 +59,13 @@ The rollout TensorBoard logger requires `TENSORBOARD_DIR` in addition to
 Megatron's `--tensorboard-dir`; both now name the same per-stage directory.
 Full-size smoke generation uses the 1024-token formal response cap to avoid
 the near-total truncation observed with the earlier 128-token smoke.
+Smoke samples 32 prompts with four responses each (128 samples); formal runs
+retain eight prompts with eight responses each (64 samples). The earlier eight
+smoke prompts all received reward 1, producing a legitimate zero GRPO gradient.
+The first smoke permits that case while validating finite updates and complete
+save/export. The resumed smoke must show a nonzero gradient and sampled master
+update before any formal run is permitted. `--resume-bf16-smoke` reuses only a
+completed owned first BF16 smoke; it does not repeat or overwrite its checkpoint.
 
 ```bash
 python3 examples/w4a8_sim/prepare_qwen3_4b.py \

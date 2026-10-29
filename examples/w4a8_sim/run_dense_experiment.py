@@ -54,8 +54,8 @@ def stage_arm(plan,mode,work,save,smoke=False,resume=False):
     command=replace_option(arm['training_command'],'--save',save)
     command=replace_option(command,'--tensorboard-dir',str(Path(work)/'tensorboard'))
     if smoke:
-        for flag,value in {'--num-rollout':2 if resume else 1,'--n-samples-per-prompt':4,
-            '--global-batch-size':32,'--seq-length':2048,'--rollout-max-response-len':1024,
+        for flag,value in {'--num-rollout':2 if resume else 1,'--rollout-batch-size':32,'--n-samples-per-prompt':4,
+            '--global-batch-size':128,'--seq-length':2048,'--rollout-max-response-len':1024,
             '--eval-max-response-len':1024,'--eval-interval':1}.items():
             command=replace_option(command,flag,value)
         index=command.index('--eval-prompt-data')
@@ -70,7 +70,7 @@ def stage_arm(plan,mode,work,save,smoke=False,resume=False):
     return arm
 
 
-def validate_run(arm,gpu_count,mode,completed):
+def validate_run(arm,gpu_count,mode,completed,require_nonzero=True):
     work,save=Path(arm['work']),Path(arm['save'])
     policy=json.loads((save/'checkpoint-policy.json').read_text())
     if policy['last']['completed_updates']!=completed:
@@ -84,12 +84,14 @@ def validate_run(arm,gpu_count,mode,completed):
     if not exported['passed'] or exported['optimizer_exported']:
         raise RuntimeError('Best must contain only validated trained model weights')
     audits=[]
+    nonzero=[]
     for rank in range(gpu_count):
         records=[json.loads(line) for line in (work/f'training-audit/optimizer-rank-{rank}.jsonl').read_text().splitlines()]
         current=[r for r in records if r['rollout_id']==step]
         if not current or not current[-1]['optimizer_success'] or not current[-1]['sampled_masters_finite']:
             raise RuntimeError(f'Missing successful optimizer update on rank {rank}')
-        if not any(r['grad_norm'] and r['sampled_master_max_update']>0 for r in records):
+        nonzero.append(any(r['grad_norm'] and r['sampled_master_max_update']>0 for r in records))
+        if require_nonzero and not nonzero[-1]:
             raise RuntimeError(f'No nonzero trained update on rank {rank}; inspect reward diversity')
         if mode=='w4a8' and current[-1]['quantized_modules']!=144:
             raise RuntimeError('Incomplete full-size linear W4A8 coverage')
@@ -106,7 +108,8 @@ def validate_run(arm,gpu_count,mode,completed):
         if len(paths)<engine_count:
             raise RuntimeError('Missing quantized rollout audit for an engine')
     return dict(passed=True,completed_updates=completed,training_mode=mode,
-        last=str(last),best=str(best),best_export=exported,rank_audits=audits)
+        last=str(last),best=str(best),best_export=exported,rank_audits=audits,
+        nonzero_gradient_seen=all(nonzero),nonzero_gradient_required=require_nonzero)
 
 
 def main():
@@ -115,6 +118,8 @@ def main():
     parser.add_argument('--frozen-source',type=Path,required=True)
     parser.add_argument('--all-idle-gpus',action='store_true',
         help='Choose every qualified idle GPU before the first smoke; retain that topology for both arms')
+    parser.add_argument('--resume-bf16-smoke',action='store_true',
+        help='Reuse a completed first BF16 smoke, then require a nonzero-gradient resumed update')
     args=parser.parse_args()
     work=args.work.resolve()
     lock=(work/'experiment.lock').open('w')
@@ -124,6 +129,13 @@ def main():
     image=subprocess.check_output(['docker','inspect','huibingyu-slime-v040','--format','{{.Image}}'],text=True).strip()
     source=args.frozen_source.resolve()
     reuse=set()
+    if args.resume_bf16_smoke:
+        previous=json.loads((work/'experiment-status.json').read_text())
+        owned=json.loads(subprocess.check_output(['docker','inspect',previous['container']],text=True))[0]
+        if owned['Config']['Labels'].get('lab.w4a8')!='qwen3-4b' or owned['State']['Running'] or owned['State']['ExitCode']!=0:
+            raise RuntimeError('Only a completed owned smoke may be reused')
+        reuse={g['uuid'] for g in previous['selected_gpus']}
+        state.update(allocation_frozen=True,allocation=plan['topology'],physical_gpus=plan['physical_gpus'])
 
     def publish():
         state['at']=datetime.now(timezone.utc).isoformat()
@@ -208,7 +220,8 @@ def main():
         if code:
             raise RuntimeError(f'{stage} failed with exit {code}; inspect {name}.log')
         expected=(2 if resume else 1) if smoke else int(arm['training_command'][arm['training_command'].index('--num-rollout')+1])
-        report=validate_run(arm,plan['topology']['train_dp'],mode,expected)
+        report=validate_run(arm,plan['topology']['train_dp'],mode,expected,
+            require_nonzero=not (smoke and not resume))
         write_json(destination/(stage+'-validation.json'),report)
         state['completed_stages'].append(dict(stage=stage,report=str(destination/(stage+'-validation.json'))))
         reuse={g['uuid'] for g in gpus}
@@ -235,7 +248,14 @@ def main():
         dataset=Path('/data2/huibingyu/slime-v040/datasets/gsm8k-seed42-val512/validation.jsonl')
         (smoke/'validation16.jsonl').write_text(''.join(dataset.read_text().splitlines(keepends=True)[:16]))
         for mode in ['bf16','w4a8']:
-            run('smoke-'+mode,mode,smoke=True)
+            if mode=='bf16' and args.resume_bf16_smoke:
+                first=stage_arm(plan,mode,work/'smoke'/mode,work/'smoke/checkpoints'/mode,smoke=True)
+                report=validate_run(first,plan['topology']['train_dp'],mode,1,require_nonzero=False)
+                path=Path(first['work'])/'smoke-bf16-validation.json'
+                write_json(path,report)
+                state['completed_stages'].append(dict(stage='smoke-bf16',report=str(path)))
+            else:
+                run('smoke-'+mode,mode,smoke=True)
             arm,report=run('resume-'+mode,mode,smoke=True,resume=True)
             # Retain best weights and validation reports; retire only the owned
             # temporary full optimizer snapshot after successful real resume.
