@@ -11,16 +11,23 @@ from pathlib import Path
 from urllib.parse import quote
 
 
+def publish_status(path, status):
+    temporary=path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(status,indent=2)+'\n')
+    temporary.replace(path)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="Qwen/Qwen3-30B-A3B")
     parser.add_argument("--source", choices=["huggingface", "modelscope"], default="huggingface")
     parser.add_argument("--destination", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
+    parser.add_argument("--workers", type=int, default=2)
     args = parser.parse_args()
     args.report.parent.mkdir(parents=True, exist_ok=True)
     status = {"model": args.model, "source":args.source, "destination": str(args.destination), "completed": False}
-    args.report.write_text(json.dumps(status, indent=2) + "\n")
+    publish_status(args.report,status)
     try:
         metadata_path = args.report.parent / ("model-info-" + args.source + ".json")
         if args.source == "modelscope":
@@ -49,7 +56,7 @@ def main():
                         raise RuntimeError(f"Existing initialization metadata differs: {existing.name}")
         status["revision"] = info["sha"]
         status["started_at"] = datetime.now(timezone.utc).isoformat()
-        args.report.write_text(json.dumps(status, indent=2) + "\n")
+        publish_status(args.report,status)
         args.destination.mkdir(parents=True, exist_ok=True)
         patterns = ["*.json", "*.safetensors", "*.model", "*.txt", "*.jinja"]
         selected = [f for f in info["siblings"] if any(fnmatch.fnmatch(f["rfilename"], pattern) for pattern in patterns)]
@@ -66,7 +73,8 @@ def main():
                     url=f'https://modelscope.cn/api/v1/models/{args.model}/repo?Revision={file["revision"]}&FilePath={quote(name)}'
                 else:
                     url = f'https://huggingface.co/{args.model}/resolve/{info["sha"]}/{quote(name)}?download=true'
-                subprocess.run(["curl", "-fL", "--retry", "3", "--connect-timeout", "10", "--max-time", "7200",
+                subprocess.run(["curl", "-fLsS", "--retry", "3", "--connect-timeout", "10", "--max-time", "7200",
+                                "--speed-limit", "1024", "--speed-time", "60",
                                 "--continue-at", "-", "--output", str(partial), url], check=True)
                 if expected is not None and partial.stat().st_size != expected:
                     raise RuntimeError(f"Incomplete model artifact: {name}")
@@ -86,11 +94,11 @@ def main():
         for file in selected:
             if not file["rfilename"].endswith(".safetensors"):
                 download(file)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as pool:
             list(pool.map(download, [f for f in selected if f["rfilename"].endswith(".safetensors")]))
         config = json.loads((args.destination / "config.json").read_text())
-        if config.get("model_type") != "qwen3_moe" or config.get("quantization_config"):
-            raise ValueError("Expected original, unquantized Qwen3 MoE initialization")
+        if config.get("model_type") not in ("qwen3", "qwen3_moe") or config.get("quantization_config"):
+            raise ValueError("Expected original, unquantized Qwen3 dense or MoE initialization")
         index = json.loads((args.destination / "model.safetensors.index.json").read_text())
         missing = [name for name in set(index["weight_map"].values()) if not (args.destination / name).is_file()]
         if missing:
@@ -101,7 +109,7 @@ def main():
         status["error"] = f"{type(exc).__name__}: {exc}"
         raise
     finally:
-        args.report.write_text(json.dumps(status, indent=2) + "\n")
+        publish_status(args.report,status)
 
 
 if __name__ == "__main__":

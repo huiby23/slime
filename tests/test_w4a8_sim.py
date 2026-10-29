@@ -119,3 +119,19 @@ def test_weight_amax_cache_requires_explicit_loader_invalidation():
 def test_reject_bad_expert_splits():
     with pytest.raises(ValueError, match="splits"):
         grouped_linear(torch.zeros(3, 32).bfloat16(), [torch.zeros(32, 32).bfloat16()], [2], recipe=W4A8Recipe())
+def test_inference_weight_cache_preserves_values_and_invalidates_hot_updates():
+    import torch
+    from slime_plugins.w4a8_sim.recipe import W4A8Recipe
+    cached = W4A8Recipe(cache_inference_weights=True)
+    reference = W4A8Recipe()
+    w = torch.randn(48, 64).bfloat16()
+    with torch.no_grad():
+        first = cached.weight(w)
+        torch.testing.assert_close(first, reference.weight(w), rtol=0, atol=0)
+        assert cached.weight(w).data_ptr() == first.data_ptr()
+        w.data.copy_(torch.randn_like(w))
+        cached.invalidate_weight_cache()
+        second = cached.weight(w)
+        torch.testing.assert_close(second, reference.weight(w), rtol=0, atol=0)
+        assert not torch.equal(first, second)
+        assert cached.counters['weight_cache_hits'] == 1

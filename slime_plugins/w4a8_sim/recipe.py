@@ -66,6 +66,8 @@ class W4A8Recipe:
     counters: Counter = field(default_factory=Counter)
     weight_amax_reducer: object = field(default=None, repr=False)
     _amax_cache: dict = field(default_factory=dict, repr=False)
+    cache_inference_weights: bool = False
+    _weight_cache: dict = field(default_factory=dict, repr=False)
 
     def activation(self, x):
         self.counters["activation_e4m3"] += 1
@@ -77,21 +79,32 @@ class W4A8Recipe:
 
     def weight(self, w):
         self.counters["weight_nvfp4"] += 1
+        try:
+            version = w._version
+        except RuntimeError:
+            version = None
+        key = (w.data_ptr(), tuple(w.shape), tuple(w.stride()), version, w.device)
+        if self.cache_inference_weights:
+            if torch.is_grad_enabled():
+                raise RuntimeError("Weight caching is inference-only; training weights must be requantized")
+            if key in self._weight_cache:
+                self.counters["weight_cache_hits"] += 1
+                return self._weight_cache[key]
         amax = None
         if self.weight_amax_reducer is not None:
-            try:
-                version = w._version
-            except RuntimeError:
-                version = None
-            key = (w.data_ptr(), tuple(w.shape), tuple(w.stride()), version)
             if key not in self._amax_cache:
                 self._amax_cache[key] = self.weight_amax_reducer(w.detach().abs().float().amax())
                 self.counters["weight_amax_reductions"] += 1
             amax = self._amax_cache[key]
-        return nvfp4_quantize(w, weight=True, reference_arithmetic=True, tensor_amax=amax).dequantize()
+        result = nvfp4_quantize(w, weight=True, reference_arithmetic=True, tensor_amax=amax).dequantize()
+        if self.cache_inference_weights:
+            self._weight_cache[key] = result
+            self.counters["weight_cache_misses"] += 1
+        return result
 
     def invalidate_weight_cache(self):
         self._amax_cache.clear()
+        self._weight_cache.clear()
 
 
 class _Linear(torch.autograd.Function):

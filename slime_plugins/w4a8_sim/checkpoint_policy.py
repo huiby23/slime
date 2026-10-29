@@ -9,6 +9,8 @@ import json
 import math
 import os
 import shutil
+import subprocess
+import sys
 import uuid
 from pathlib import Path
 
@@ -44,6 +46,13 @@ def storage_roots(root):
 
 def allocate_pending(root, required_bytes):
     roots = storage_roots(root)
+    if os.environ.get("W4A8_STORAGE_FIRST_FIT") == "1":
+        selected = next((p for p in roots if shutil.disk_usage(p).free >= required_bytes), None)
+        if selected is None:
+            raise RuntimeError(f"No checkpoint filesystem has {required_bytes} available bytes")
+        pending = selected / (".pending-" + uuid.uuid4().hex)
+        pending.mkdir()
+        return pending
     choices = sorted(((shutil.disk_usage(p).free, str(p), p) for p in roots), reverse=True)
     available, _, selected = choices[0]
     if available < required_bytes:
@@ -61,11 +70,11 @@ def prune(root):
         pointer = root / name
         if pointer.is_symlink():
             target = pointer.resolve(strict=True)
-            if target.parent not in roots or not target.name.startswith("step_"):
+            if target.parent not in roots or not target.name.startswith(("step_", "best_step_")):
                 raise RuntimeError(f"Checkpoint pointer outside owned storage: {pointer}")
             keep.add(target)
     for physical in roots:
-        for path in physical.glob("step_*"):
+        for path in list(physical.glob("step_*")) + list(physical.glob("best_step_*")):
             if path.is_dir() and not path.is_symlink() and path.resolve() not in keep:
                 shutil.rmtree(path)
 
@@ -106,11 +115,48 @@ def record_evaluation(root, rollout_id, score, questions):
     state["latest_evaluation"] = evaluation
     last, best = state.get("last"), state.get("best")
     if last is not None and last["rollout_id"] == rollout_id and (best is None or score > best["score"]):
-        _point(root, "best", Path(last["snapshot"]))
-        state["best"] = dict(last, **evaluation)
+        if os.environ.get("W4A8_BEST_WEIGHTS_ONLY") == "1":
+            destination = export_best_weights(root, last)
+            _point(root, "best", destination)
+            state["best"] = dict(evaluation, completed_updates=rollout_id + 1,
+                snapshot=str(destination), format="hf-bf16-weights", optimizer_included=False)
+        else:
+            _point(root, "best", Path(last["snapshot"]))
+            state["best"] = dict(last, **evaluation)
     atomic_json(root / "checkpoint-policy.json", state)
     prune(root)
     return state
+
+
+def export_best_weights(root, last):
+    """Export only trained dense Qwen tensors in a separate CPU subprocess.
+
+    Evaluation owns a CUDA-visible rollout actor. The exporter must create no
+    CUDA context and must not read optimizer tensors into memory.
+    """
+    pending = allocate_pending(root, int(os.environ["W4A8_BEST_BYTES"]))
+    # The existing exporter requires a fresh output directory.
+    pending.rmdir()
+    script = Path(__file__).resolve().parents[2] / "examples/nvfp4_sim/export_diagnostic_hf.py"
+    step = last["rollout_id"]
+    source = Path(last["snapshot"]) / f"iter_{step:07d}"
+    environment = dict(os.environ, CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="4")
+    subprocess.run([sys.executable, str(script), "--input", str(source), "--origin",
+        os.environ["W4A8_INITIAL_MODEL"], "--output", str(pending)], env=environment, check=True)
+    report = json.loads((pending / "export-validation.json").read_text())
+    if not report.get("passed") or report.get("optimizer_exported") is not False:
+        raise RuntimeError("Best export did not pass weight-only validation")
+    if report["iteration"] != step or not (pending / "model.safetensors").is_file():
+        raise RuntimeError("Best export does not match the selected trained step")
+    atomic_json(pending / "precision-policy.json", dict(
+        training_mode=os.environ.get("W4A8_TRAINING_MODE", "w4a8"),
+        stored_weight_dtype="bfloat16", optimizer_included=False,
+        inference_requires_explicit_precision_selection=True))
+    target = pending.parent / f"best_step_{step:07d}"
+    if target.exists():
+        raise FileExistsError(target)
+    pending.rename(target)
+    return target
 
 
 def eval_log_hook(rollout_id, args, data, extra_metrics=None):

@@ -1,0 +1,248 @@
+"""Run gated full-size smoke/resume, then matched BF16 and W4A8 experiments.
+
+Uses only observed idle GPUs. It never kills foreign processes. Every Docker
+attempt uses frozen source and an isolated local Ray cluster. A failed gate
+stops the queue with a visible error; it never promotes a failed smoke.
+"""
+
+import argparse
+import copy
+import fcntl
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def write_json(path,value):
+    temporary=path.with_suffix('.tmp')
+    temporary.write_text(json.dumps(value,indent=2)+'\n')
+    temporary.replace(path)
+
+
+def replace_option(command,flag,value):
+    command=list(command)
+    if flag in command:
+        command[command.index(flag)+1]=str(value)
+    else:
+        command += [flag,str(value)]
+    return command
+
+
+def stage_arm(plan,mode,work,save,smoke=False,resume=False):
+    arm=copy.deepcopy(plan['arms'][mode])
+    original_work,original_save=arm['work'],arm['save']
+    work,save=str(work),str(save)
+    arm['environment']={key:value.replace(original_work,work).replace(original_save,save)
+        for key,value in arm['environment'].items()}
+    arm['environment']['W4A8_RUN_NAMESPACE']=mode+'-'+('smoke' if smoke else 'formal')
+    arm['environment']['RAY_TMPDIR']='/data2/huibingyu/r4b/'+mode+('-s' if smoke else '-f')
+    command=replace_option(arm['training_command'],'--save',save)
+    command=replace_option(command,'--tensorboard-dir',str(Path(work)/'tensorboard'))
+    if smoke:
+        for flag,value in {'--num-rollout':2 if resume else 1,'--n-samples-per-prompt':4,
+            '--global-batch-size':32,'--seq-length':1024,'--rollout-max-response-len':128,
+            '--eval-max-response-len':128,'--eval-interval':1}.items():
+            command=replace_option(command,flag,value)
+        index=command.index('--eval-prompt-data')
+        command[index+2]=str(Path(work).parent/'validation16.jsonl')
+        command += ['--skip-eval-before-train']
+    if resume:
+        command=replace_option(command,'--load',str(Path(save)/'last'))
+        if '--start-rollout-id' in command:
+            index=command.index('--start-rollout-id')
+            del command[index:index+2]
+    arm.update(training_command=command,work=work,save=save)
+    return arm
+
+
+def validate_run(arm,gpu_count,mode,completed):
+    work,save=Path(arm['work']),Path(arm['save'])
+    policy=json.loads((save/'checkpoint-policy.json').read_text())
+    if policy['last']['completed_updates']!=completed:
+        raise RuntimeError('Full-size run did not complete the expected updates')
+    last=(save/'last').resolve(strict=True)
+    step=completed-1
+    if not (last/f'iter_{step:07d}/.metadata').is_file():
+        raise RuntimeError('Missing complete native last checkpoint')
+    best=(save/'best').resolve(strict=True)
+    exported=json.loads((best/'export-validation.json').read_text())
+    if not exported['passed'] or exported['optimizer_exported']:
+        raise RuntimeError('Best must contain only validated trained model weights')
+    audits=[]
+    for rank in range(gpu_count):
+        records=[json.loads(line) for line in (work/f'training-audit/optimizer-rank-{rank}.jsonl').read_text().splitlines()]
+        current=[r for r in records if r['rollout_id']==step]
+        if not current or not current[-1]['optimizer_success'] or not current[-1]['sampled_masters_finite']:
+            raise RuntimeError(f'Missing successful optimizer update on rank {rank}')
+        if not any(r['grad_norm'] and r['sampled_master_max_update']>0 for r in records):
+            raise RuntimeError(f'No nonzero trained update on rank {rank}; inspect reward diversity')
+        if mode=='w4a8' and current[-1]['quantized_modules']!=144:
+            raise RuntimeError('Incomplete full-size linear W4A8 coverage')
+        audits.append(current[-1])
+    if mode=='w4a8':
+        paths=list((work/'rollout-audit').rglob('rollout-rank-*.json'))
+        for path in paths:
+            report=json.loads(path.read_text())
+            if len(report['projections'])!=144:
+                raise RuntimeError('Incomplete full-size rollout W4A8 coverage')
+            if report['counters'].get('weight_cache_misses',0)<288:
+                raise RuntimeError('No rollout cache invalidation after trained weight synchronization')
+        if len(paths)<gpu_count:
+            raise RuntimeError('Missing quantized rollout audit for an engine')
+    return dict(passed=True,completed_updates=completed,training_mode=mode,
+        last=str(last),best=str(best),best_export=exported,rank_audits=audits)
+
+
+def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--work',type=Path,required=True)
+    parser.add_argument('--frozen-source',type=Path,required=True)
+    args=parser.parse_args()
+    work=args.work.resolve()
+    lock=(work/'experiment.lock').open('w')
+    fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    plan=json.loads((work/'training-plan.json').read_text())
+    state=dict(phase='preparing',formal_training_started=False,completed_stages=[],model=plan['model'])
+    image=subprocess.check_output(['docker','inspect','huibingyu-slime-v040','--format','{{.Image}}'],text=True).strip()
+    source=args.frozen_source.resolve()
+    reuse=set()
+
+    def publish():
+        state['at']=datetime.now(timezone.utc).isoformat()
+        write_json(work/'experiment-status.json',state)
+
+    def acquire():
+        while True:
+            status=json.loads((work/'gpus/idle-status.json').read_text())
+            age=(datetime.now(timezone.utc)-datetime.fromisoformat(status['at'])).total_seconds()
+            processes=subprocess.check_output(['nvidia-smi','--query-compute-apps=gpu_uuid,pid',
+                '--format=csv,noheader'],text=True,timeout=10)
+            eligible=[g for g in status.get('gpus',[]) if g['idle'] and g['uuid'] not in processes
+                and (g['qualified'] or g['uuid'] in reuse)] if age<20 else []
+            if len(eligible)>=len(plan['physical_gpus']):
+                return eligible[:len(plan['physical_gpus'])]
+            state.update(phase='waiting_for_idle_gpus',gpus=status.get('gpus',[]))
+            publish()
+            time.sleep(10)
+
+    def run(stage,mode,smoke=False,resume=False):
+        nonlocal reuse
+        gpus=acquire()
+        destination=work/'smoke'/mode if smoke else Path(plan['arms'][mode]['work'])
+        save=work/'smoke'/'checkpoints'/mode if smoke else Path(plan['arms'][mode]['save'])
+        destination.mkdir(parents=True,exist_ok=True)
+        save.mkdir(parents=True,exist_ok=True)
+        arm=stage_arm(plan,mode,destination,save,smoke,resume)
+        # Each SGLang engine uses TP=1 and owns its own audit file.
+        arm['environment']['W4A8_ROLLOUT_AUDIT_DIR']=str(destination/'rollout-audit')
+        for key in ['TMPDIR','RAY_TMPDIR','TRITON_CACHE_DIR','TORCHINDUCTOR_CACHE_DIR']:
+            Path(arm['environment'][key]).mkdir(parents=True,exist_ok=True)
+        name='huibingyu-4b-'+stage+'-'+datetime.now().strftime('%m%d-%H%M%S')
+        command=['docker','run','-d','--name',name,'--label','lab.w4a8=qwen3-4b',
+            '--gpus','"device='+','.join(g['uuid'] for g in gpus)+'"','--shm-size','16g',
+            '--env','CUDA_VISIBLE_DEVICES='+','.join(str(i) for i in range(len(gpus)))]
+        for key,value in arm['environment'].items():
+            command += ['--env',key+'='+value]
+        for src,dst in [(source/'quant','/quant'),(source/'slime','/workspace/slime'),
+            (Path('/data2/huibingyu/slime-v040'),'/experiment'),(work,str(work)),
+            (Path(plan['model_path']),plan['model_path']),
+            (Path('/data2/huibingyu/r4b'),'/data2/huibingyu/r4b')]:
+            readonly=',readonly' if dst in ('/quant','/workspace/slime','/experiment',plan['model_path']) else ''
+            command += ['--mount',f'type=bind,src={src},dst={dst}{readonly}']
+        command += ['--workdir','/workspace/slime','--entrypoint','python3',image]+arm['training_command'][1:]
+        manifest=dict(stage=stage,mode=mode,gpus=gpus,command=command,arm=arm,image=image,
+            frozen_source=str(source),at=datetime.now(timezone.utc).isoformat())
+        manifest_path=work/(name+'.json')
+        if manifest_path.exists():
+            raise FileExistsError(manifest_path)
+        write_json(manifest_path,manifest)
+        cid=subprocess.check_output(command,text=True).strip()
+        state.update(phase=stage,container=name,container_id=cid,selected_gpus=gpus,
+            work=str(destination),save=str(save))
+        state.pop('checkpoint_policy',None)
+        if not smoke:
+            state['formal_launched']=True
+        publish()
+        with (work/(name+'.log')).open('w') as log:
+            reader=subprocess.Popen(['docker','logs','-f',name],stdout=log,stderr=subprocess.STDOUT)
+            while subprocess.check_output(['docker','inspect',name,'--format','{{.State.Running}}'],text=True).strip()=='true':
+                policy=save/'checkpoint-policy.json'
+                if policy.is_file():
+                    state['checkpoint_policy']=json.loads(policy.read_text())
+                    if not smoke and state['checkpoint_policy'].get('last',{}).get('completed_updates',0)>0:
+                        state['formal_training_started']=True
+                state['observed_gpus']=json.loads((work/'gpus/idle-status.json').read_text()).get('gpus',[])
+                publish()
+                time.sleep(10)
+            reader.wait(timeout=30)
+        code=int(subprocess.check_output(['docker','inspect',name,'--format','{{.State.ExitCode}}'],text=True))
+        if code:
+            raise RuntimeError(f'{stage} failed with exit {code}; inspect {name}.log')
+        expected=(2 if resume else 1) if smoke else int(arm['training_command'][arm['training_command'].index('--num-rollout')+1])
+        report=validate_run(arm,len(gpus),mode,expected)
+        write_json(destination/(stage+'-validation.json'),report)
+        state['completed_stages'].append(dict(stage=stage,report=str(destination/(stage+'-validation.json'))))
+        reuse={g['uuid'] for g in gpus}
+        return arm,report
+
+    try:
+        for path in [work/'preflight-bf16.json',work/'preflight-w4a8.json']:
+            if not json.loads(path.read_text())['argument_parse_passed']:
+                raise RuntimeError('CPU preflight failed')
+        for path in [work/'cuda-dense-dp4-a3/validation.json',work/'cuda-dense-rollout-a1/validation.json']:
+            if not json.loads(path.read_text())['passed']:
+                raise RuntimeError('Small real-backend validation failed')
+        while not json.loads((work/'model-download.json').read_text()).get('completed'):
+            downloaded=json.loads((work/'model-download.json').read_text())
+            if downloaded.get('error'):
+                raise RuntimeError(downloaded['error'])
+            state.update(phase='downloading_initial_weights')
+            publish()
+            time.sleep(10)
+        if shutil.disk_usage(work).free<plan['estimates']['two_arm_peak_including_shared_initial_bytes']*1.15:
+            raise RuntimeError('Insufficient free NVMe storage for both experiments and atomic saves')
+        smoke=work/'smoke'
+        smoke.mkdir(exist_ok=True)
+        dataset=Path('/data2/huibingyu/slime-v040/datasets/gsm8k-seed42-val512/validation.jsonl')
+        (smoke/'validation16.jsonl').write_text(''.join(dataset.read_text().splitlines(keepends=True)[:16]))
+        for mode in ['bf16','w4a8']:
+            run('smoke-'+mode,mode,smoke=True)
+            arm,report=run('resume-'+mode,mode,smoke=True,resume=True)
+            # Retain best weights and validation reports; retire only the owned
+            # temporary full optimizer snapshot after successful real resume.
+            save=Path(arm['save'])
+            last=(save/'last').resolve(strict=True)
+            physical=save/'.snapshots'
+            owner=json.loads((physical/'.w4a8-owner.json').read_text())
+            if last.parent!=physical.resolve() or not last.name.startswith('step_') or owner!={'logical_save_root':str(save.resolve())}:
+                raise RuntimeError('Refusing to retire a checkpoint outside owned smoke storage')
+            metadata=last/f"iter_{report['completed_updates']-1:07d}/.metadata"
+            write_json(Path(arm['work'])/'retired-smoke-last.json',dict(
+                snapshot=str(last),metadata_sha256=hashlib.sha256(metadata.read_bytes()).hexdigest(),
+                reason='Full-size resume validated; best weights and reports retained'))
+            (save/'last').unlink()
+            shutil.rmtree(last)
+            policy=json.loads((save/'checkpoint-policy.json').read_text())
+            policy['retired_smoke_last']=policy.pop('last')
+            policy['last']=None
+            write_json(save/'checkpoint-policy.json',policy)
+        state.update(phase='full_size_smokes_passed')
+        state['full_size_validated']=True
+        publish()
+        for mode in ['bf16','w4a8']:
+            run('formal-'+mode,mode)
+        state.update(phase='complete')
+    except Exception as error:
+        state.update(phase='failed',error=f'{type(error).__name__}: {error}')
+        raise
+    finally:
+        publish()
+
+
+if __name__=='__main__':
+    main()

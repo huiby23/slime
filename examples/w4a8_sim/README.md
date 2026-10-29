@@ -1,5 +1,64 @@
 # Qwen3-30B-A3B W4A8 numerical training simulation
 
+## Current experiment: Qwen3-4B Dense (2026-10-29)
+
+The user selected original `Qwen/Qwen3-4B` after reviewing storage costs.
+`prepare_qwen3_4b.py` prepares matched native BF16 and custom linear W4A8
+GRPO runs. Initialization, data, seed, learning rate, batch sizes, sequence
+limits, and topology match; the W4A8 arm installs the quantized linear
+forward/backward and rollout adapters. This remains a linear-layer experiment:
+FA QK/softmax/PV retain baseline precision. It is not a native FP4 performance
+benchmark or NVIDIA's default W4A4 recipe.
+
+The 4B plan preserves tied embeddings and uses TP=1, EP=1, DP=4 for training,
+with four TP=1 rollout engines on the same four GPUs, phased CPU offload and
+100 optimizer updates per arm. Original Qwen3-4B has 4,022,468,096 parameters.
+Complete `last` is about 52.45 GiB; HF BF16 weights-only `best` is about
+7.49 GiB. Save a complete last after every update and best weights only after
+an improved evaluation. The two-arm estimated peak, including one shared
+initialization and an atomic-save temporary copy, is 179.82 GiB before caches,
+logs and metadata. Prefer the available NVMe filesystem for these writes.
+
+Best export reads model tensors from the committed native checkpoint on CPU,
+checks all HF names/shapes/dtypes and trained tied weights, and excludes optimizer
+state. A failed best export never replaces best or last. Full snapshots no
+longer remain referenced by best. Temporary full-size smoke checkpoints may be
+retired after successful resume, retaining their best weights, manifests and
+validation reports.
+
+Inference caches the exact FP32 dequantized NVFP4 weight values, invalidating
+the cache on every native `load_weights` update. This adds up to about 15 GiB
+per rollout engine and avoids requantizing every weight at every decode token.
+Activations still quantize each call. The cache is disabled for training.
+No values are rounded to BF16 when entering the FP32 weight cache.
+
+Validation recorded so far: 48 CPU numerical/backend/policy/paired-plan tests;
+real dense DP=4 training with CPU Adam, exact next-update checkpoint resume,
+and strict CPU weights-only export; real SGLang dense TP=1 generation and
+projection coverage. These small random models do not establish full 4B
+compatibility or accuracy.
+
+`run_dense_experiment.py` waits for checksum-verified complete weights and
+observed idle GPUs, runs a full-size one-update smoke and a one-update resume
+for each arm, checks nonzero sampled master updates and rollout cache
+invalidation, and only then launches the two formal arms. Smoke uses a separate
+16-question evaluation subset and shorter generation; formal settings remain
+those in the prepared plan. Each attempt has frozen source, a recorded Docker
+command and GPU UUIDs, and its own local Ray cluster. It stops visibly on a
+failed gate. Its live state is `experiment-status.json`; formal launch and
+completed optimizer updates are separate facts.
+
+```bash
+python3 examples/w4a8_sim/prepare_qwen3_4b.py \
+  --model /data3/huibingyu/models/Qwen3-4B \
+  --output /data2/huibingyu/nvfp4-sim/qwen3-4b-w4a8-20261029 \
+  --checkpoints /data2/huibingyu/nvfp4-sim/qwen3-4b-w4a8-20261029/checkpoints \
+  --gpus 0 1 2 3
+```
+
+The remainder documents the earlier 30B MoE preparation; those artifacts and
+results are preserved separately.
+
 This experiment is separate from the completed Qwen3-0.6B W4A4 experiment.
 It loads original BF16 `Qwen/Qwen3-30B-A3B` initialization, not an INT4/FP8
 checkpoint and not the differently configured Instruct-2507 model.

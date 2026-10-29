@@ -69,3 +69,34 @@ def test_fail_before_save_when_no_single_filesystem_has_space(tmp_path, monkeypa
     monkeypatch.setenv("W4A8_CHECKPOINT_ROOTS", json.dumps([str(tmp_path / "physical")]))
     with pytest.raises(RuntimeError, match="No checkpoint filesystem"):
         allocate_pending(tmp_path / "logical", 2**100)
+
+
+def test_weight_only_best_does_not_retain_full_optimizer_snapshot(tmp_path, monkeypatch):
+    from slime_plugins.w4a8_sim import checkpoint_policy as policy
+    root, physical = tmp_path/'run', tmp_path/'disk'
+    monkeypatch.setenv('W4A8_CHECKPOINT_ROOTS',json.dumps([str(physical)]))
+    monkeypatch.setenv('W4A8_BEST_WEIGHTS_ONLY','1')
+    def export(root,last):
+        target=physical/f"best_step_{last['rollout_id']:07d}"
+        target.mkdir()
+        (target/'model.safetensors').write_text('weights only')
+        return target
+    monkeypatch.setattr(policy,'export_best_weights',export)
+    pending=allocate_pending(root,1)
+    complete(pending,0)
+    first=publish_last(root,pending,0)
+    state=record_evaluation(root,0,0.8,32)
+    best=(root/'best').resolve()
+    assert best!=first and state['best']['optimizer_included'] is False
+    pending=allocate_pending(root,1)
+    complete(pending,1)
+    second=publish_last(root,pending,1)
+    assert not first.exists() and best.exists() and second.exists()
+    record_evaluation(root,1,0.7,32)
+    assert (root/'best').resolve()==best
+    def fail(*args):
+        raise RuntimeError('export interrupted')
+    monkeypatch.setattr(policy,'export_best_weights',fail)
+    with pytest.raises(RuntimeError,match='export interrupted'):
+        record_evaluation(root,1,0.9,32)
+    assert (root/'last').resolve()==second and (root/'best').resolve()==best
