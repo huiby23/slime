@@ -82,6 +82,10 @@ reuses completed BF16 validation reports instead of repeating their updates.
 starts the formal pair. Runtime/cache directories are initialized inside the
 training container before framework imports, since CPU preflight can create
 root-owned cache parents that the host launcher cannot traverse.
+Initial evaluation publishes `last=None`; monitoring counts that as zero
+completed updates. `--adopt-container <owned-formal-container>` replaces only
+the monitor while preserving the running training, original launch manifest,
+frozen training sources and accumulated logs.
 
 GPU assignment to Docker precedes several minutes of Python/Ray initialization;
 during that interval the training process may have no visible CUDA context.

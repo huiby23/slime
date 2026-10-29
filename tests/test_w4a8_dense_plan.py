@@ -84,6 +84,13 @@ def test_idle_selection_rechecks_compute_owners_and_rejects_stale_observations()
     assert not run.eligible_gpus(status,processes,{'GPU-reuse'})
 
 
+def test_initial_evaluation_before_the_first_checkpoint_is_zero_completed_updates():
+    run=module('run_dense_experiment')
+    assert run.completed_updates({})==0
+    assert run.completed_updates({'last':None,'latest_evaluation':{'score':.8}})==0
+    assert run.completed_updates({'last':{'completed_updates':1}})==1
+
+
 def test_zero_gradient_smoke_never_satisfies_the_formal_training_gate(tmp_path):
     run=module('run_dense_experiment')
     work,save=tmp_path/'work',tmp_path/'save'

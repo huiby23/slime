@@ -43,6 +43,11 @@ def eligible_gpus(status,processes,reuse=()):
         and (g['qualified'] or g['uuid'] in reuse)]
 
 
+def completed_updates(policy):
+    # Initial evaluation legitimately writes a policy with last=None.
+    return (policy.get('last') or {}).get('completed_updates',0)
+
+
 def stage_arm(plan,mode,work,save,smoke=False,resume=False):
     arm=copy.deepcopy(plan['arms'][mode])
     original_work,original_save=arm['work'],arm['save']
@@ -168,6 +173,8 @@ def main():
         help='Reuse passed BF16 smoke/resume reports, finish retirement, then continue with W4A8')
     parser.add_argument('--resume-after-validation',action='store_true',
         help='Reuse passed full-size smoke/resume reports for both arms and launch formal runs')
+    parser.add_argument('--adopt-container',
+        help='Monitor an already launched owned formal container without restarting its training')
     args=parser.parse_args()
     work=args.work.resolve()
     lock=(work/'experiment.lock').open('w')
@@ -177,11 +184,20 @@ def main():
     image=subprocess.check_output(['docker','inspect','huibingyu-slime-v040','--format','{{.Image}}'],text=True).strip()
     source=args.frozen_source.resolve()
     reuse=set()
+    adoption=None
+    if args.adopt_container:
+        adoption=json.loads((work/(args.adopt_container+'.json')).read_text())
+        if adoption['stage']!='formal-'+adoption['mode'] or adoption['image']!=image:
+            raise RuntimeError('Only this experiment image and a formal launch manifest may be adopted')
     if args.resume_bf16_smoke or args.resume_after_bf16_validation or args.resume_after_validation:
         previous=json.loads((work/'experiment-status.json').read_text())
         owned=json.loads(subprocess.check_output(['docker','inspect',previous['container']],text=True))[0]
-        if owned['Config']['Labels'].get('lab.w4a8')!='qwen3-4b' or owned['State']['Running']:
+        adopting=bool(adoption and previous['container']==args.adopt_container)
+        if (owned['Config']['Labels'].get('lab.w4a8')!='qwen3-4b'
+            or (owned['State']['Running'] and not adopting)):
             raise RuntimeError('Only an exited owned smoke with a validated checkpoint may be reused')
+        if adopting and not any(m['Source']==str(work) and m['Destination']==str(work) for m in owned['Mounts']):
+            raise RuntimeError('Adopted container must mount this exact work directory')
         reuse={g['uuid'] for g in previous['selected_gpus']}
         state.update(allocation_frozen=True,allocation=plan['topology'],physical_gpus=plan['physical_gpus'])
 
@@ -216,18 +232,23 @@ def main():
 
     def run(stage,mode,smoke=False,resume=False):
         nonlocal reuse
-        gpus=acquire()
+        adopting=adoption is not None and stage==adoption['stage']
+        gpus=adoption['gpus'] if adopting else acquire()
         destination=work/'smoke'/mode if smoke else Path(plan['arms'][mode]['work'])
         save=work/'smoke'/'checkpoints'/mode if smoke else Path(plan['arms'][mode]['save'])
         destination.mkdir(parents=True,exist_ok=True)
         save.mkdir(parents=True,exist_ok=True)
         arm=stage_arm(plan,mode,destination,save,smoke,resume)
+        if adopting:
+            arm=adoption['arm']
+            if arm['work']!=str(destination) or arm['save']!=str(save):
+                raise RuntimeError('Adopted artifact destinations do not match the plan')
         # Each SGLang engine uses TP=1 and owns its own audit file.
         arm['environment']['W4A8_ROLLOUT_AUDIT_DIR']=str(destination/'rollout-audit')
         # Framework caches are created inside the container. CPU preflight can
         # create root-owned 0700 cache parents that the host cannot traverse.
         Path('/data2/huibingyu/r4b').mkdir(parents=True,exist_ok=True)
-        name='huibingyu-4b-'+stage+'-'+datetime.now().strftime('%m%d-%H%M%S')
+        name=args.adopt_container if adopting else 'huibingyu-4b-'+stage+'-'+datetime.now().strftime('%m%d-%H%M%S')
         command=['docker','run','-d','--name',name,'--label','lab.w4a8=qwen3-4b',
             '--gpus','"device='+','.join(g['uuid'] for g in gpus)+'"','--shm-size','16g',
             '--env','CUDA_VISIBLE_DEVICES='+','.join(str(i) for i in range(len(gpus)))]
@@ -243,23 +264,31 @@ def main():
         manifest=dict(stage=stage,mode=mode,gpus=gpus,command=command,arm=arm,image=image,
             frozen_source=str(source),at=datetime.now(timezone.utc).isoformat())
         manifest_path=work/(name+'.json')
-        if manifest_path.exists():
+        if manifest_path.exists() and not adopting:
             raise FileExistsError(manifest_path)
-        write_json(manifest_path,manifest)
-        cid=subprocess.check_output(command,text=True).strip()
+        if adopting:
+            cid=subprocess.check_output(['docker','inspect',name,'--format','{{.Id}}'],text=True).strip()
+            state['adopted_training_source']=adoption['frozen_source']
+            write_json(work/(name+'-monitor-'+datetime.now().strftime('%H%M%S')+'.json'),dict(
+                container=name,monitoring_source=str(source),training_source=adoption['frozen_source'],
+                training_restarted=False,at=datetime.now(timezone.utc).isoformat()))
+        else:
+            write_json(manifest_path,manifest)
+            cid=subprocess.check_output(command,text=True).strip()
         state.update(phase=stage,container=name,container_id=cid,selected_gpus=gpus,
             work=str(destination),save=str(save))
         state.pop('checkpoint_policy',None)
         if not smoke:
             state['formal_launched']=True
         publish()
-        with (work/(name+'.log')).open('w') as log:
-            reader=subprocess.Popen(['docker','logs','-f',name],stdout=log,stderr=subprocess.STDOUT)
+        with (work/(name+'.log')).open('a' if adopting else 'w') as log:
+            log_command=['docker','logs','-f']+(['--tail','0'] if adopting else [])+[name]
+            reader=subprocess.Popen(log_command,stdout=log,stderr=subprocess.STDOUT)
             while subprocess.check_output(['docker','inspect',name,'--format','{{.State.Running}}'],text=True).strip()=='true':
                 policy=save/'checkpoint-policy.json'
                 if policy.is_file():
                     state['checkpoint_policy']=json.loads(policy.read_text())
-                    if not smoke and state['checkpoint_policy'].get('last',{}).get('completed_updates',0)>0:
+                    if not smoke and completed_updates(state['checkpoint_policy'])>0:
                         state['formal_training_started']=True
                 state['observed_gpus']=json.loads((work/'gpus/idle-status.json').read_text()).get('gpus',[])
                 publish()
