@@ -117,6 +117,45 @@ def validate_run(arm,gpu_count,mode,completed,require_nonzero=True):
         nonzero_gradient_seen=all(nonzero),nonzero_gradient_required=require_nonzero)
 
 
+def retire_smoke(arm,report,image):
+    """Remove only validated owned smoke state, including root-owned files."""
+    if not report.get('passed') or not report.get('nonzero_gradient_seen'):
+        raise RuntimeError('Refusing to retire unvalidated smoke state')
+    save=Path(arm['save'])
+    physical=save/'.snapshots'
+    last=Path(report['last'])
+    policy=json.loads((save/'checkpoint-policy.json').read_text())
+    owner=json.loads((physical/'.w4a8-owner.json').read_text())
+    if last.parent!=physical.resolve() or not last.name.startswith('step_') or owner!={'logical_save_root':str(save.resolve())}:
+        raise RuntimeError('Refusing to retire a checkpoint outside owned smoke storage')
+    best=(save/'best').resolve(strict=True)
+    if best==last or best!=Path(report['best']) or not (best/'model.safetensors').is_file():
+        raise RuntimeError('A separate validated weights-only best must survive smoke retirement')
+    if policy.get('last') is None and not last.exists() and policy.get('retired_smoke_last',{}).get('snapshot')==str(last):
+        return
+    if policy.get('last',{}).get('snapshot')!=str(last):
+        raise RuntimeError('Smoke retirement no longer matches the current last')
+    pointer=save/'last'
+    if pointer.is_symlink() and pointer.resolve(strict=True)!=last:
+        raise RuntimeError('Smoke last pointer does not match the validated report')
+    metadata=last/f"iter_{report['completed_updates']-1:07d}/.metadata"
+    write_json(Path(arm['work'])/'retired-smoke-last.json',dict(
+        snapshot=str(last),metadata_sha256=hashlib.sha256(metadata.read_bytes()).hexdigest(),
+        reason='Full-size resume validated; best weights and reports retained'))
+    # Training containers create root-owned directories. The CPU-only helper
+    # sees just this owned snapshot root and removes only the validated step.
+    subprocess.run(['docker','run','--rm','--network','none','--env','NVIDIA_VISIBLE_DEVICES=void',
+        '--mount',f'type=bind,src={physical},dst=/snapshot','--entrypoint','python3',image,
+        '-c','import pathlib,shutil,sys; p=pathlib.Path("/snapshot")/sys.argv[1]; '
+        'assert p.parent==pathlib.Path("/snapshot") and p.name.startswith("step_") and not p.is_symlink(); '
+        'shutil.rmtree(p)',last.name],check=True)
+    if pointer.is_symlink():
+        pointer.unlink()
+    policy['retired_smoke_last']=policy.pop('last')
+    policy['last']=None
+    write_json(save/'checkpoint-policy.json',policy)
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--work',type=Path,required=True)
@@ -125,6 +164,8 @@ def main():
         help='Choose every qualified idle GPU before the first smoke; retain that topology for both arms')
     parser.add_argument('--resume-bf16-smoke',action='store_true',
         help='Reuse a completed first BF16 smoke, then require a nonzero-gradient resumed update')
+    parser.add_argument('--resume-after-bf16-validation',action='store_true',
+        help='Reuse passed BF16 smoke/resume reports, finish retirement, then continue with W4A8')
     args=parser.parse_args()
     work=args.work.resolve()
     lock=(work/'experiment.lock').open('w')
@@ -134,7 +175,7 @@ def main():
     image=subprocess.check_output(['docker','inspect','huibingyu-slime-v040','--format','{{.Image}}'],text=True).strip()
     source=args.frozen_source.resolve()
     reuse=set()
-    if args.resume_bf16_smoke:
+    if args.resume_bf16_smoke or args.resume_after_bf16_validation:
         previous=json.loads((work/'experiment-status.json').read_text())
         owned=json.loads(subprocess.check_output(['docker','inspect',previous['container']],text=True))[0]
         if owned['Config']['Labels'].get('lab.w4a8')!='qwen3-4b' or owned['State']['Running']:
@@ -157,7 +198,7 @@ def main():
                 previous=list(plan['physical_gpus'])
                 updated=prepare(Path(plan['model_path']),work,work/'checkpoints',
                     [g['index'] for g in eligible])
-                write_json(work/'training-plan-before-allocation.json',plan)
+                write_json(work/('training-plan-before-allocation-'+datetime.now().strftime('%Y%m%d-%H%M%S')+'.json'),plan)
                 plan.clear()
                 plan.update(updated)
                 write_json(work/'training-plan.json',plan)
@@ -253,6 +294,19 @@ def main():
         dataset=Path('/data2/huibingyu/slime-v040/datasets/gsm8k-seed42-val512/validation.jsonl')
         (smoke/'validation16.jsonl').write_text(''.join(dataset.read_text().splitlines(keepends=True)[:16]))
         for mode in ['bf16','w4a8']:
+            if mode=='bf16' and args.resume_after_bf16_validation:
+                arm=stage_arm(plan,mode,work/'smoke'/mode,work/'smoke/checkpoints'/mode,smoke=True,resume=True)
+                path=Path(arm['work'])/'resume-bf16-validation.json'
+                report=json.loads(path.read_text())
+                if report.get('completed_updates')!=2 or report.get('training_mode')!='bf16':
+                    raise RuntimeError('Missing completed BF16 resume validation')
+                retire_smoke(arm,report,image)
+                for stage in ['smoke-bf16','resume-bf16']:
+                    state['completed_stages'].append(dict(stage=stage,report=str(Path(arm['work'])/(stage+'-validation.json'))))
+                state['bf16_validation_topology']=dict(plan['topology'])
+                if args.all_idle_gpus:
+                    state['allocation_frozen']=False
+                continue
             if mode=='bf16' and args.resume_bf16_smoke:
                 first=stage_arm(plan,mode,work/'smoke'/mode,work/'smoke/checkpoints'/mode,smoke=True)
                 report=validate_run(first,plan['topology']['train_dp'],mode,1,require_nonzero=False)
@@ -264,22 +318,11 @@ def main():
             arm,report=run('resume-'+mode,mode,smoke=True,resume=True)
             # Retain best weights and validation reports; retire only the owned
             # temporary full optimizer snapshot after successful real resume.
-            save=Path(arm['save'])
-            last=(save/'last').resolve(strict=True)
-            physical=save/'.snapshots'
-            owner=json.loads((physical/'.w4a8-owner.json').read_text())
-            if last.parent!=physical.resolve() or not last.name.startswith('step_') or owner!={'logical_save_root':str(save.resolve())}:
-                raise RuntimeError('Refusing to retire a checkpoint outside owned smoke storage')
-            metadata=last/f"iter_{report['completed_updates']-1:07d}/.metadata"
-            write_json(Path(arm['work'])/'retired-smoke-last.json',dict(
-                snapshot=str(last),metadata_sha256=hashlib.sha256(metadata.read_bytes()).hexdigest(),
-                reason='Full-size resume validated; best weights and reports retained'))
-            (save/'last').unlink()
-            shutil.rmtree(last)
-            policy=json.loads((save/'checkpoint-policy.json').read_text())
-            policy['retired_smoke_last']=policy.pop('last')
-            policy['last']=None
-            write_json(save/'checkpoint-policy.json',policy)
+            retire_smoke(arm,report,image)
+            if mode=='bf16':
+                state['bf16_validation_topology']=dict(plan['topology'])
+                if args.all_idle_gpus:
+                    state['allocation_frozen']=False
         state.update(phase='full_size_smokes_passed')
         state['full_size_validated']=True
         publish()

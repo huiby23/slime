@@ -54,7 +54,10 @@ Training uses the largest DP degree dividing the fixed 64-sample global batch
 Both precision arms retain the same topology and batch. The isolated Ray
 cluster advertises the full rollout allocation. `--all-idle-gpus` chooses all
 qualified idle GPUs before the first smoke and freezes that allocation for
-the paired experiment; it never launches on a GPU with a foreign compute PID.
+that validation. It refreshes the allocation once after BF16 validation, then
+keeps the W4A8 smoke/resume and both formal arms on matching topology. BF16's
+earlier technical validation topology remains recorded separately if resources
+change. It never launches on a GPU with a foreign compute PID.
 The rollout TensorBoard logger requires `TENSORBOARD_DIR` in addition to
 Megatron's `--tensorboard-dir`; both now name the same per-stage directory.
 Full-size smoke generation uses the 1024-token formal response cap to avoid
@@ -70,6 +73,11 @@ Extending the smoke changes its planned scheduler duration. Smoke resume uses
 native `--override-opt-param-scheduler` to retain the extended constant LR/WD
 configuration while restoring the consumed-sample count and full Adam state.
 Formal resumes with unchanged settings do not use this override.
+Validated smoke optimizer snapshots are retired by a CPU-only Docker helper
+because training output directories are root-owned. The helper mounts only
+the owned snapshot root, checks the selected step, and preserves the separate
+weights-only best. Retirement can be retried. `--resume-after-bf16-validation`
+reuses completed BF16 validation reports instead of repeating their updates.
 
 ```bash
 python3 examples/w4a8_sim/prepare_qwen3_4b.py \

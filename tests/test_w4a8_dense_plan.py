@@ -137,3 +137,40 @@ def test_extended_smoke_keeps_native_adam_state_and_constant_learning_rate():
     resumed.step(128)
     assert resumed.num_steps==160
     assert resumed_optimizer.param_groups[0]['lr']==1e-6
+
+
+def test_retire_owned_smoke_keeps_best_and_can_be_retried(tmp_path,monkeypatch):
+    import shutil
+    run=module('run_dense_experiment')
+    work,save=tmp_path/'work',tmp_path/'save'
+    work.mkdir()
+    physical=save/'.snapshots'
+    last,best=physical/'step_0000001',physical/'best_step_0000000'
+    (last/'iter_0000001').mkdir(parents=True)
+    (last/'iter_0000001/.metadata').write_text('validated native checkpoint')
+    best.mkdir()
+    (best/'model.safetensors').write_text('retained trained weights')
+    (physical/'.w4a8-owner.json').write_text(json.dumps({'logical_save_root':str(save.resolve())}))
+    (save/'last').symlink_to(last)
+    (save/'best').symlink_to(best)
+    (save/'checkpoint-policy.json').write_text(json.dumps({'last':{'snapshot':str(last),'completed_updates':2}}))
+    report={'passed':True,'nonzero_gradient_seen':True,'last':str(last),'best':str(best),'completed_updates':2}
+    arm={'work':str(work),'save':str(save)}
+    calls=[]
+    def helper(command,check):
+        assert '--gpus' not in command and 'none' in command
+        assert command[command.index('--mount')+1]==f'type=bind,src={physical},dst=/snapshot'
+        calls.append(command)
+        shutil.rmtree(physical/command[-1])
+    monkeypatch.setattr(run.subprocess,'run',helper)
+    with pytest.raises(RuntimeError,match='unvalidated'):
+        run.retire_smoke(arm,dict(report,nonzero_gradient_seen=False),'pinned-image')
+    with pytest.raises(RuntimeError,match='outside owned'):
+        run.retire_smoke(arm,dict(report,last=str(tmp_path/'foreign/step_0000001')),'pinned-image')
+    assert not calls and last.exists()
+    run.retire_smoke(arm,report,'pinned-image')
+    assert not last.exists() and (best/'model.safetensors').is_file()
+    assert not (save/'last').is_symlink()
+    assert json.loads((save/'checkpoint-policy.json').read_text())['last'] is None
+    run.retire_smoke(arm,report,'pinned-image')
+    assert len(calls)==1
