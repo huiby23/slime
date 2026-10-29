@@ -166,6 +166,8 @@ def main():
         help='Reuse a completed first BF16 smoke, then require a nonzero-gradient resumed update')
     parser.add_argument('--resume-after-bf16-validation',action='store_true',
         help='Reuse passed BF16 smoke/resume reports, finish retirement, then continue with W4A8')
+    parser.add_argument('--resume-after-validation',action='store_true',
+        help='Reuse passed full-size smoke/resume reports for both arms and launch formal runs')
     args=parser.parse_args()
     work=args.work.resolve()
     lock=(work/'experiment.lock').open('w')
@@ -175,7 +177,7 @@ def main():
     image=subprocess.check_output(['docker','inspect','huibingyu-slime-v040','--format','{{.Image}}'],text=True).strip()
     source=args.frozen_source.resolve()
     reuse=set()
-    if args.resume_bf16_smoke or args.resume_after_bf16_validation:
+    if args.resume_bf16_smoke or args.resume_after_bf16_validation or args.resume_after_validation:
         previous=json.loads((work/'experiment-status.json').read_text())
         owned=json.loads(subprocess.check_output(['docker','inspect',previous['container']],text=True))[0]
         if owned['Config']['Labels'].get('lab.w4a8')!='qwen3-4b' or owned['State']['Running']:
@@ -222,8 +224,9 @@ def main():
         arm=stage_arm(plan,mode,destination,save,smoke,resume)
         # Each SGLang engine uses TP=1 and owns its own audit file.
         arm['environment']['W4A8_ROLLOUT_AUDIT_DIR']=str(destination/'rollout-audit')
-        for key in ['TMPDIR','RAY_TMPDIR','TRITON_CACHE_DIR','TORCHINDUCTOR_CACHE_DIR']:
-            Path(arm['environment'][key]).mkdir(parents=True,exist_ok=True)
+        # Framework caches are created inside the container. CPU preflight can
+        # create root-owned 0700 cache parents that the host cannot traverse.
+        Path('/data2/huibingyu/r4b').mkdir(parents=True,exist_ok=True)
         name='huibingyu-4b-'+stage+'-'+datetime.now().strftime('%m%d-%H%M%S')
         command=['docker','run','-d','--name',name,'--label','lab.w4a8=qwen3-4b',
             '--gpus','"device='+','.join(g['uuid'] for g in gpus)+'"','--shm-size','16g',
@@ -294,6 +297,17 @@ def main():
         dataset=Path('/data2/huibingyu/slime-v040/datasets/gsm8k-seed42-val512/validation.jsonl')
         (smoke/'validation16.jsonl').write_text(''.join(dataset.read_text().splitlines(keepends=True)[:16]))
         for mode in ['bf16','w4a8']:
+            if args.resume_after_validation:
+                arm=stage_arm(plan,mode,work/'smoke'/mode,work/'smoke/checkpoints'/mode,smoke=True,resume=True)
+                path=Path(arm['work'])/('resume-'+mode+'-validation.json')
+                report=json.loads(path.read_text())
+                if (not report.get('passed') or not report.get('nonzero_gradient_seen')
+                    or report.get('completed_updates')!=2 or report.get('training_mode')!=mode):
+                    raise RuntimeError(f'Missing completed full-size {mode} resume validation')
+                retire_smoke(arm,report,image)
+                for stage in ['smoke-'+mode,'resume-'+mode]:
+                    state['completed_stages'].append(dict(stage=stage,report=str(Path(arm['work'])/(stage+'-validation.json'))))
+                continue
             if mode=='bf16' and args.resume_after_bf16_validation:
                 arm=stage_arm(plan,mode,work/'smoke'/mode,work/'smoke/checkpoints'/mode,smoke=True,resume=True)
                 path=Path(arm['work'])/'resume-bf16-validation.json'

@@ -3,6 +3,12 @@
 import os
 from pathlib import Path
 
+# Cache directories may already be owned by a previous CPU preflight container.
+# Create/access them as the training container user, before importing frameworks.
+for _key in ['TMPDIR','RAY_TMPDIR','TRITON_CACHE_DIR','TORCHINDUCTOR_CACHE_DIR']:
+    if os.environ.get(_key):
+        Path(os.environ[_key]).mkdir(parents=True,exist_ok=True)
+
 import train as baseline
 from w4a8_sim.checkpoint_policy import save_last
 

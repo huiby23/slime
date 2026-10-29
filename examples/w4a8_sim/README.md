@@ -78,6 +78,10 @@ because training output directories are root-owned. The helper mounts only
 the owned snapshot root, checks the selected step, and preserves the separate
 weights-only best. Retirement can be retried. `--resume-after-bf16-validation`
 reuses completed BF16 validation reports instead of repeating their updates.
+`--resume-after-validation` reuses both passed full-size resume reports and
+starts the formal pair. Runtime/cache directories are initialized inside the
+training container before framework imports, since CPU preflight can create
+root-owned cache parents that the host launcher cannot traverse.
 
 GPU assignment to Docker precedes several minutes of Python/Ray initialization;
 during that interval the training process may have no visible CUDA context.
