@@ -16,8 +16,11 @@ def prepare(model, output, checkpoint_root, gpus, updates=100):
         raise ValueError("Expected original BF16 dense Qwen3 initialization")
     if config["num_hidden_layers"] != 36 or config["hidden_size"] != 2560 or not config["tie_word_embeddings"]:
         raise ValueError("This experiment requires original tied-embedding Qwen3-4B")
-    if len(gpus) != len(set(gpus)) or len(gpus) not in (1, 2, 4):
-        raise ValueError("Use one, two or four distinct GPUs")
+    if len(gpus) != len(set(gpus)) or not 1 <= len(gpus) <= 8:
+        raise ValueError("Use between one and eight distinct GPUs")
+    # Keep the matched 64-sample global batch for every allocation. All GPUs
+    # generate samples; training uses the largest DP degree dividing that batch.
+    train_gpus = max(n for n in range(1, len(gpus) + 1) if 64 % n == 0)
     parameters = index["metadata"]["total_size"] // 2
     common = ["--num-layers",str(config["num_hidden_layers"]),"--hidden-size",str(config["hidden_size"]),
         "--ffn-hidden-size",str(config["intermediate_size"]),"--num-attention-heads",str(config["num_attention_heads"]),
@@ -26,7 +29,7 @@ def prepare(model, output, checkpoint_root, gpus, updates=100):
         "--normalization","RMSNorm","--norm-epsilon",str(config["rms_norm_eps"]),
         "--position-embedding-type","rope","--rotary-base",str(int(config["rope_theta"])),
         "--vocab-size",str(config["vocab_size"]),"--hf-checkpoint",str(model),"--load",str(model),
-        "--actor-num-nodes","1","--actor-num-gpus-per-node",str(len(gpus)),
+        "--actor-num-nodes","1","--actor-num-gpus-per-node",str(train_gpus),
         "--rollout-num-gpus",str(len(gpus)),"--num-gpus-per-node",str(len(gpus)),
         "--tensor-model-parallel-size","1","--pipeline-model-parallel-size","1",
         "--context-parallel-size","1","--expert-model-parallel-size","1","--expert-tensor-parallel-size","1",
@@ -58,7 +61,7 @@ def prepare(model, output, checkpoint_root, gpus, updates=100):
         "--tokenizer-path",str(model)]
     result = dict(model="Qwen/Qwen3-4B",model_path=str(model),physical_gpus=gpus,
         formal_launch_ready=False,scope="Linear W4A8 simulation; FA core retains baseline precision",
-        topology=dict(train_tp=1,train_dp=len(gpus),train_ep=1,rollout_tp=1,rollout_engines=len(gpus)),
+        topology=dict(train_tp=1,train_dp=train_gpus,train_ep=1,rollout_tp=1,rollout_engines=len(gpus)),
         estimates=dict(parameters=parameters,full_checkpoint_bytes=parameters*14,
             best_weights_bytes=parameters*2,two_arm_peak_including_shared_initial_bytes=parameters*48,
             inference_fp32_quantized_weight_cache_bytes=parameters*4),arms={})
@@ -80,6 +83,7 @@ def prepare(model, output, checkpoint_root, gpus, updates=100):
             "W4A8_TRAINING_AUDIT_DIR":str(work/"training-audit"),
             "W4A8_AUDIT_PER_ENGINE":"1",
             "W4A8_ISOLATED_RAY":"1","W4A8_RUN_NAMESPACE":"qwen3-4b-"+mode,
+            "TENSORBOARD_DIR":str(work/"tensorboard"),
             "OMP_NUM_THREADS":"2","NVTE_ALLOW_NONDETERMINISTIC_ALGO":"0","CUBLAS_WORKSPACE_CONFIG":":4096:8",
             "CUDA_DEVICE_MAX_CONNECTIONS":"1","PYTHONDONTWRITEBYTECODE":"1",
             "TMPDIR":str(work/"tmp"),"RAY_TMPDIR":"/data2/huibingyu/r4b/"+mode,

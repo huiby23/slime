@@ -2,9 +2,10 @@
 
 import importlib.util
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-NUM_GPUS=0
+import pytest
 
 
 def module(name):
@@ -15,7 +16,7 @@ def module(name):
     return result
 
 
-def test_matched_dense_arms_and_resume_preserve_model_and_data(tmp_path):
+def model_metadata(tmp_path):
     model=tmp_path/'model'
     model.mkdir()
     config=dict(model_type='qwen3',num_hidden_layers=36,hidden_size=2560,
@@ -23,6 +24,11 @@ def test_matched_dense_arms_and_resume_preserve_model_and_data(tmp_path):
         num_key_value_heads=8,head_dim=128,rms_norm_eps=1e-6,rope_theta=1000000,vocab_size=151936)
     (model/'config.json').write_text(json.dumps(config))
     (model/'model.safetensors.index.json').write_text(json.dumps({'metadata':{'total_size':8044936192}}))
+    return model
+
+
+def test_matched_dense_arms_and_resume_preserve_model_and_data(tmp_path):
+    model=model_metadata(tmp_path)
     plan=module('prepare_qwen3_4b').prepare(model,tmp_path/'work',tmp_path/'checkpoints',[0,1,2,3])
     def normalized(command):
         result=list(command)
@@ -40,4 +46,35 @@ def test_matched_dense_arms_and_resume_preserve_model_and_data(tmp_path):
     assert command[command.index('--hf-checkpoint')+1]==str(model)
     assert '--untie-embeddings-and-output-weights' not in command
     assert resumed['environment']['W4A8_BEST_WEIGHTS_ONLY']=='1'
+    assert resumed['environment']['TENSORBOARD_DIR']==str(tmp_path/'smoke/w4a8/tensorboard')
     assert json.loads(resumed['environment']['W4A8_CHECKPOINT_ROOTS'])==[str(tmp_path/'smoke/checkpoints/w4a8/.snapshots')]
+
+
+@pytest.mark.parametrize('available,train_count',[(3,2),(7,4),(8,8)])
+def test_use_every_gpu_for_rollout_without_changing_the_training_batch(tmp_path,available,train_count):
+    model=model_metadata(tmp_path)
+    plan=module('prepare_qwen3_4b').prepare(model,tmp_path/'work',tmp_path/'checkpoints',list(range(available)))
+    for mode in ['bf16','w4a8']:
+        arm=plan['arms'][mode]
+        command=arm['training_command']
+        option=lambda name:command[command.index(name)+1]
+        assert int(option('--actor-num-gpus-per-node'))==train_count
+        assert int(option('--rollout-num-gpus'))==available
+        assert int(option('--global-batch-size'))==64
+        assert int(option('--rollout-batch-size'))*int(option('--n-samples-per-prompt'))==64
+        assert arm['environment']['TENSORBOARD_DIR']==option('--tensorboard-dir')
+
+
+def test_idle_selection_rechecks_compute_owners_and_rejects_stale_observations():
+    run=module('run_dense_experiment')
+    now=datetime.now(timezone.utc)
+    status={'at':now.isoformat(),'gpus':[
+        {'uuid':'GPU-free','idle':True,'qualified':True},
+        {'uuid':'GPU-raced','idle':True,'qualified':True},
+        {'uuid':'GPU-reuse','idle':True,'qualified':False},
+        {'uuid':'GPU-active','idle':False,'qualified':False}]}
+    processes='GPU-raced, 123\nGPU-active, 456\n'
+    selected=run.eligible_gpus(status,processes,{'GPU-reuse'})
+    assert [g['uuid'] for g in selected]==['GPU-free','GPU-reuse']
+    status['at']=(now-timedelta(seconds=30)).isoformat()
+    assert not run.eligible_gpus(status,processes,{'GPU-reuse'})

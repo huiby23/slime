@@ -10,7 +10,7 @@ forward/backward and rollout adapters. This remains a linear-layer experiment:
 FA QK/softmax/PV retain baseline precision. It is not a native FP4 performance
 benchmark or NVIDIA's default W4A4 recipe.
 
-The 4B plan preserves tied embeddings and uses TP=1, EP=1, DP=4 for training,
+The 4B plan preserves tied embeddings and uses TP=1, EP=1, DP=4 by default,
 with four TP=1 rollout engines on the same four GPUs, phased CPU offload and
 100 optimizer updates per arm. Original Qwen3-4B has 4,022,468,096 parameters.
 Complete `last` is about 52.45 GiB; HF BF16 weights-only `best` is about
@@ -47,6 +47,18 @@ those in the prepared plan. Each attempt has frozen source, a recorded Docker
 command and GPU UUIDs, and its own local Ray cluster. It stops visibly on a
 failed gate. Its live state is `experiment-status.json`; formal launch and
 completed optimizer updates are separate facts.
+
+For an allocation of one to eight GPUs, every GPU runs a TP=1 rollout engine.
+Training uses the largest DP degree dividing the fixed 64-sample global batch
+(for example DP=4 with seven rollout engines, or DP=8 with eight engines).
+Both precision arms retain the same topology and batch. The isolated Ray
+cluster advertises the full rollout allocation. `--all-idle-gpus` chooses all
+qualified idle GPUs before the first smoke and freezes that allocation for
+the paired experiment; it never launches on a GPU with a foreign compute PID.
+The rollout TensorBoard logger requires `TENSORBOARD_DIR` in addition to
+Megatron's `--tensorboard-dir`; both now name the same per-stage directory.
+Full-size smoke generation uses the 1024-token formal response cap to avoid
+the near-total truncation observed with the earlier 128-token smoke.
 
 ```bash
 python3 examples/w4a8_sim/prepare_qwen3_4b.py \

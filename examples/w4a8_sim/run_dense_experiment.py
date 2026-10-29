@@ -33,6 +33,16 @@ def replace_option(command,flag,value):
     return command
 
 
+def eligible_gpus(status,processes,reuse=()):
+    """Accept only fresh idle observations with no current compute owner."""
+    age=(datetime.now(timezone.utc)-datetime.fromisoformat(status['at'])).total_seconds()
+    if not 0 <= age < 20:
+        return []
+    busy={line.split(',')[0].strip() for line in processes.splitlines() if ',' in line}
+    return [g for g in status.get('gpus',[]) if g['idle'] and g['uuid'] not in busy
+        and (g['qualified'] or g['uuid'] in reuse)]
+
+
 def stage_arm(plan,mode,work,save,smoke=False,resume=False):
     arm=copy.deepcopy(plan['arms'][mode])
     original_work,original_save=arm['work'],arm['save']
@@ -45,8 +55,8 @@ def stage_arm(plan,mode,work,save,smoke=False,resume=False):
     command=replace_option(command,'--tensorboard-dir',str(Path(work)/'tensorboard'))
     if smoke:
         for flag,value in {'--num-rollout':2 if resume else 1,'--n-samples-per-prompt':4,
-            '--global-batch-size':32,'--seq-length':1024,'--rollout-max-response-len':128,
-            '--eval-max-response-len':128,'--eval-interval':1}.items():
+            '--global-batch-size':32,'--seq-length':2048,'--rollout-max-response-len':1024,
+            '--eval-max-response-len':1024,'--eval-interval':1}.items():
             command=replace_option(command,flag,value)
         index=command.index('--eval-prompt-data')
         command[index+2]=str(Path(work).parent/'validation16.jsonl')
@@ -92,7 +102,8 @@ def validate_run(arm,gpu_count,mode,completed):
                 raise RuntimeError('Incomplete full-size rollout W4A8 coverage')
             if report['counters'].get('weight_cache_misses',0)<288:
                 raise RuntimeError('No rollout cache invalidation after trained weight synchronization')
-        if len(paths)<gpu_count:
+        engine_count=int(arm['training_command'][arm['training_command'].index('--rollout-num-gpus')+1])
+        if len(paths)<engine_count:
             raise RuntimeError('Missing quantized rollout audit for an engine')
     return dict(passed=True,completed_updates=completed,training_mode=mode,
         last=str(last),best=str(best),best_export=exported,rank_audits=audits)
@@ -102,6 +113,8 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--work',type=Path,required=True)
     parser.add_argument('--frozen-source',type=Path,required=True)
+    parser.add_argument('--all-idle-gpus',action='store_true',
+        help='Choose every qualified idle GPU before the first smoke; retain that topology for both arms')
     args=parser.parse_args()
     work=args.work.resolve()
     lock=(work/'experiment.lock').open('w')
@@ -119,13 +132,24 @@ def main():
     def acquire():
         while True:
             status=json.loads((work/'gpus/idle-status.json').read_text())
-            age=(datetime.now(timezone.utc)-datetime.fromisoformat(status['at'])).total_seconds()
             processes=subprocess.check_output(['nvidia-smi','--query-compute-apps=gpu_uuid,pid',
                 '--format=csv,noheader'],text=True,timeout=10)
-            eligible=[g for g in status.get('gpus',[]) if g['idle'] and g['uuid'] not in processes
-                and (g['qualified'] or g['uuid'] in reuse)] if age<20 else []
-            if len(eligible)>=len(plan['physical_gpus']):
-                return eligible[:len(plan['physical_gpus'])]
+            eligible=eligible_gpus(status,processes,reuse)
+            if args.all_idle_gpus and not state.get('allocation_frozen') and eligible:
+                from prepare_qwen3_4b import prepare
+                previous=list(plan['physical_gpus'])
+                updated=prepare(Path(plan['model_path']),work,work/'checkpoints',
+                    [g['index'] for g in eligible])
+                write_json(work/'training-plan-before-allocation.json',plan)
+                plan.clear()
+                plan.update(updated)
+                write_json(work/'training-plan.json',plan)
+                state.update(allocation_frozen=True,previous_planned_gpus=previous,
+                    allocation=plan['topology'],physical_gpus=plan['physical_gpus'])
+                publish()
+            required=len(plan['physical_gpus'])
+            if len(eligible)>=required and (not args.all_idle_gpus or state.get('allocation_frozen')):
+                return eligible[:required]
             state.update(phase='waiting_for_idle_gpus',gpus=status.get('gpus',[]))
             publish()
             time.sleep(10)
@@ -184,7 +208,7 @@ def main():
         if code:
             raise RuntimeError(f'{stage} failed with exit {code}; inspect {name}.log')
         expected=(2 if resume else 1) if smoke else int(arm['training_command'][arm['training_command'].index('--num-rollout')+1])
-        report=validate_run(arm,len(gpus),mode,expected)
+        report=validate_run(arm,plan['topology']['train_dp'],mode,expected)
         write_json(destination/(stage+'-validation.json'),report)
         state['completed_stages'].append(dict(stage=stage,report=str(destination/(stage+'-validation.json'))))
         reuse={g['uuid'] for g in gpus}

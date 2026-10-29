@@ -21,7 +21,9 @@ def main():
         plan=dict(shared,**shared["arms"][mode])
     os.environ.update(plan["environment"])
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    os.environ.update(WORLD_SIZE=str(len(plan.get("physical_gpus",[0,1,2,3]))), RANK="0", LOCAL_RANK="0")
+    command=plan["training_command"]
+    world_size=int(command[command.index("--actor-num-gpus-per-node")+1])
+    os.environ.update(WORLD_SIZE=str(world_size), RANK="0", LOCAL_RANK="0")
     sys.argv = plan["training_command"][1:]
     import train
     # Only CLI validation queries capability; the actual A100 kernels and EP
@@ -35,6 +37,8 @@ def main():
     assert args.offload_train and args.offload_rollout and args.save_interval == 1
     assert not args.no_save_optim and not args.no_save_rng and not args.async_save
     if dense:
+        assert os.environ["TENSORBOARD_DIR"]==args.tensorboard_dir
+        assert args.global_batch_size % world_size==0
         from w4a8_sim.sglang_models.qwen3 import W4A8SimQwen3ForCausalLM
         assert W4A8SimQwen3ForCausalLM.__name__ == "W4A8SimQwen3ForCausalLM"
         assert not args.untie_embeddings_and_output_weights and args.num_layers==36
