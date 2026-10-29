@@ -66,6 +66,10 @@ The first smoke permits that case while validating finite updates and complete
 save/export. The resumed smoke must show a nonzero gradient and sampled master
 update before any formal run is permitted. `--resume-bf16-smoke` reuses only a
 completed owned first BF16 smoke; it does not repeat or overwrite its checkpoint.
+Extending the smoke changes its planned scheduler duration. Smoke resume uses
+native `--override-opt-param-scheduler` to retain the extended constant LR/WD
+configuration while restoring the consumed-sample count and full Adam state.
+Formal resumes with unchanged settings do not use this override.
 
 ```bash
 python3 examples/w4a8_sim/prepare_qwen3_4b.py \

@@ -63,6 +63,11 @@ def stage_arm(plan,mode,work,save,smoke=False,resume=False):
         command += ['--skip-eval-before-train']
     if resume:
         command=replace_option(command,'--load',str(Path(save)/'last'))
+        if smoke:
+            # The smoke extends its planned duration (and may broaden its
+            # batch). Keep the new constant schedule while restoring consumed
+            # samples, model weights and every Adam state from the checkpoint.
+            command += ['--override-opt-param-scheduler']
         if '--start-rollout-id' in command:
             index=command.index('--start-rollout-id')
             del command[index:index+2]
@@ -132,8 +137,8 @@ def main():
     if args.resume_bf16_smoke:
         previous=json.loads((work/'experiment-status.json').read_text())
         owned=json.loads(subprocess.check_output(['docker','inspect',previous['container']],text=True))[0]
-        if owned['Config']['Labels'].get('lab.w4a8')!='qwen3-4b' or owned['State']['Running'] or owned['State']['ExitCode']!=0:
-            raise RuntimeError('Only a completed owned smoke may be reused')
+        if owned['Config']['Labels'].get('lab.w4a8')!='qwen3-4b' or owned['State']['Running']:
+            raise RuntimeError('Only an exited owned smoke with a validated checkpoint may be reused')
         reuse={g['uuid'] for g in previous['selected_gpus']}
         state.update(allocation_frozen=True,allocation=plan['topology'],physical_gpus=plan['physical_gpus'])
 

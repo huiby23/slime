@@ -42,6 +42,7 @@ def test_matched_dense_arms_and_resume_preserve_model_and_data(tmp_path):
     resumed=run.stage_arm(plan,'w4a8',tmp_path/'smoke/w4a8',tmp_path/'smoke/checkpoints/w4a8',True,True)
     command=resumed['training_command']
     assert '--start-rollout-id' not in command
+    assert '--override-opt-param-scheduler' in command
     assert command[command.index('--load')+1]==str(tmp_path/'smoke/checkpoints/w4a8/last')
     assert command[command.index('--hf-checkpoint')+1]==str(model)
     assert '--untie-embeddings-and-output-weights' not in command
@@ -104,3 +105,35 @@ def test_zero_gradient_smoke_never_satisfies_the_formal_training_gate(tmp_path):
     assert first['passed'] and not first['nonzero_gradient_seen']
     with pytest.raises(RuntimeError,match='No nonzero trained update'):
         run.validate_run(arm,1,'bf16',1)
+
+
+def test_extended_smoke_keeps_native_adam_state_and_constant_learning_rate():
+    import copy
+    import torch
+    from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
+
+    def scheduler(optimizer,total,override):
+        return OptimizerParamScheduler(optimizer,init_lr=0,max_lr=1e-6,min_lr=0,
+            lr_warmup_steps=0,lr_decay_steps=total,lr_decay_style='constant',
+            start_wd=.1,end_wd=.1,wd_incr_steps=total,wd_incr_style='constant',
+            use_checkpoint_opt_param_scheduler=False,override_opt_param_scheduler=override)
+    parameter=torch.nn.Parameter(torch.tensor([1.0]))
+    optimizer=torch.optim.Adam([parameter],lr=1e-6)
+    first=scheduler(optimizer,32,False)
+    parameter.grad=torch.tensor([.2])
+    optimizer.step()
+    first.step(32)
+    saved=copy.deepcopy(optimizer.state_dict())
+    resumed_parameter=torch.nn.Parameter(parameter.detach().clone())
+    resumed_optimizer=torch.optim.Adam([resumed_parameter],lr=1e-6)
+    resumed_optimizer.load_state_dict(saved)
+    resumed=scheduler(resumed_optimizer,256,True)
+    resumed.load_state_dict(first.state_dict())
+    assert resumed.num_steps==32 and resumed.lr_decay_steps==256
+    for name in ['exp_avg','exp_avg_sq','step']:
+        assert torch.equal(resumed_optimizer.state[resumed_parameter][name],optimizer.state[parameter][name])
+    resumed_parameter.grad=torch.tensor([.3])
+    resumed_optimizer.step()
+    resumed.step(128)
+    assert resumed.num_steps==160
+    assert resumed_optimizer.param_groups[0]['lr']==1e-6
