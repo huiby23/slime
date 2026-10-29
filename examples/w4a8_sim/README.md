@@ -79,6 +79,18 @@ the owned snapshot root, checks the selected step, and preserves the separate
 weights-only best. Retirement can be retried. `--resume-after-bf16-validation`
 reuses completed BF16 validation reports instead of repeating their updates.
 
+GPU assignment to Docker precedes several minutes of Python/Ray initialization;
+during that interval the training process may have no visible CUDA context.
+`watch_gpu_claims.py --work <run-root>` starts a lightweight CUDA occupancy
+marker only inside running containers with this work mount and our exact label.
+It allocates 64 MiB per visible GPU (the driver context adds further overhead),
+records GPU UUIDs and script hashes, and exits with the container. It neither
+provides exclusive GPU ownership nor proves that an optimizer update occurred.
+The auxiliary script is recorded separately from the frozen model source, and
+the marker does not stop another user's process. Container processes appear as
+`root` in host GPU monitors. Optimizer audits and checkpoint reports remain the
+evidence of actual training progress.
+
 ```bash
 python3 examples/w4a8_sim/prepare_qwen3_4b.py \
   --model /data3/huibingyu/models/Qwen3-4B \
