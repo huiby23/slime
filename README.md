@@ -1,5 +1,9 @@
 # slime
 
+This local branch contains the Qwen3-4B low-precision training study. Start with
+[README_4B.md](README_4B.md) for its scope, code layout, validation and artifacts.
+The upstream Slime documentation follows below.
+
 [中文版](./README_zh.md)
 
 [![Documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg?style=flat)](https://thudm.github.io/slime/)

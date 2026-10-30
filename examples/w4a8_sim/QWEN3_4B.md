@@ -28,6 +28,7 @@ and native FP4 performance are outside this version's implemented scope.
 | --- | --- |
 | Quantization arithmetic | `slime_plugins/w4a8_sim/recipe.py` |
 | Megatron training adapter | `slime_plugins/w4a8_sim/megatron.py` |
+| Shared Dense/MoE SGLang linear interface | `slime_plugins/w4a8_sim/sglang_linear.py` |
 | SGLang rollout adapter | `slime_plugins/w4a8_sim/sglang_models/qwen3.py` |
 | Atomic best/last policy | `slime_plugins/w4a8_sim/checkpoint_policy.py` |
 | Matched BF16/W4A8 plan | `examples/w4a8_sim/prepare_qwen3_4b.py` |
@@ -57,6 +58,13 @@ a consistent accuracy advantage for either precision.
 The BF16 training source was commit `6eb03e4c`; W4A8 used `a7bf5a76`.
 The latter adds initial-evaluation monitoring/adoption handling. Frozen sources
 and original launch manifests remain beside the experiment artifacts.
+
+Later local cleanup separates the shared rollout linear adapter from the MoE
+model module and formats the W4A8 source with Black at 119 columns. The
+quantization and optimizer computations retain the same Python AST, and the
+moved linear method retains the same class body. The result index's source
+hashes identify the original formal commits; checkout the baseline tag for
+those exact source files.
 
 ## Version management
 

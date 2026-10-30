@@ -1,1 +1,1 @@
-"""SGLang external-model discovery package for W4A8 Qwen3 MoE."""
+"""SGLang external-model discovery for dense and MoE W4A8 Qwen3 models."""

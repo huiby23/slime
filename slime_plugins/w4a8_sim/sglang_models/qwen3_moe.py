@@ -18,31 +18,28 @@ from sglang.srt.layers.moe.topk import TopKOutputChecker
 from sglang.srt.layers.quantization.unquant import UnquantizedLinearMethod, UnquantizedFusedMoEMethod
 from sglang.srt.models.qwen3_moe import Qwen3MoeForCausalLM
 
-from ..recipe import W4A8Recipe, linear, routed_experts
-
-
-class W4A8LinearMethod(UnquantizedLinearMethod):
-    def __init__(self, recipe):
-        self.recipe = recipe
-
-    def apply(self, layer, x, bias=None):
-        with torch.no_grad():
-            return linear(x, layer.weight, bias, recipe=self.recipe)
+from ..recipe import W4A8Recipe, routed_experts
+from ..sglang_linear import W4A8LinearMethod
 
 
 class FP32RouterMethod(UnquantizedLinearMethod):
     """Match Megatron --moe-router-dtype fp32 without quantizing the router."""
 
     def apply(self, layer, x, bias=None):
-        return torch.nn.functional.linear(x.float(), layer.weight.float(),
-                                          None if bias is None else bias.float())
+        return torch.nn.functional.linear(x.float(), layer.weight.float(), None if bias is None else bias.float())
 
 
 def _experts_forward(self, hidden_states, topk_output):
     if not TopKOutputChecker.format_is_standard(topk_output):
         raise ValueError("W4A8 requires standard top-k outputs, no bypassed router")
-    result = routed_experts(hidden_states, self.w13_weight, self.w2_weight,
-                           topk_output.topk_ids, topk_output.topk_weights, recipe=self._w4a8_recipe)
+    result = routed_experts(
+        hidden_states,
+        self.w13_weight,
+        self.w2_weight,
+        topk_output.topk_ids,
+        topk_output.topk_weights,
+        recipe=self._w4a8_recipe,
+    )
     callback = getattr(self._w4a8_recipe, "audit_callback", None)
     if callback is not None:
         callback()
@@ -59,9 +56,11 @@ class W4A8SimQwen3MoeForCausalLM(Qwen3MoeForCausalLM):
             raise ValueError("W4A8 simulation requires --moe-runner-backend triton, no MoE all-to-all backend")
         recipe = W4A8Recipe()
         if get_tensor_model_parallel_world_size() > 1:
+
             def reduce_amax(amax):
                 dist.all_reduce(amax, op=dist.ReduceOp.MAX, group=get_tp_group().device_group)
                 return amax
+
             recipe.weight_amax_reducer = reduce_amax
         names, experts, routers = [], [], []
         for name, module in self.named_modules():
@@ -84,8 +83,11 @@ class W4A8SimQwen3MoeForCausalLM(Qwen3MoeForCausalLM):
                     raise TypeError(f"Expected unquantized router at {name}")
                 module.quant_method = FP32RouterMethod()
                 routers.append(name)
-        if (len(names) != config.num_hidden_layers * 2 or len(experts) != config.num_hidden_layers
-                or len(routers) != config.num_hidden_layers):
+        if (
+            len(names) != config.num_hidden_layers * 2
+            or len(experts) != config.num_hidden_layers
+            or len(routers) != config.num_hidden_layers
+        ):
             raise RuntimeError(f"Incomplete W4A8 coverage: {len(names)} projections, {len(experts)} expert banks")
         self._w4a8_recipe = recipe
         self._w4a8_modules = tuple(names + experts)
@@ -93,16 +95,29 @@ class W4A8SimQwen3MoeForCausalLM(Qwen3MoeForCausalLM):
         self._w4a8_audit_written = False
         audit_dir = os.environ.get("W4A8_ROLLOUT_AUDIT_DIR")
         if audit_dir:
+
             def audit():
                 if self._w4a8_audit_written:
                     return
                 destination = Path(audit_dir)
-                destination.mkdir(parents=True,exist_ok=True)
+                destination.mkdir(parents=True, exist_ok=True)
                 path = destination / f"rollout-rank-{get_tp_group().rank_in_group}.json"
-                path.write_text(json.dumps(dict(architecture=type(self).__name__,
-                    projections=names, expert_banks=experts, fp32_routers=routers,
-                    counters=dict(recipe.counters), tp_size=get_tensor_model_parallel_world_size()),indent=2)+"\n")
+                path.write_text(
+                    json.dumps(
+                        dict(
+                            architecture=type(self).__name__,
+                            projections=names,
+                            expert_banks=experts,
+                            fp32_routers=routers,
+                            counters=dict(recipe.counters),
+                            tp_size=get_tensor_model_parallel_world_size(),
+                        ),
+                        indent=2,
+                    )
+                    + "\n"
+                )
                 self._w4a8_audit_written = True
+
             recipe.audit_callback = audit
 
     def load_weights(self, *args, **kwargs):
