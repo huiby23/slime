@@ -68,35 +68,27 @@ those exact source files.
 
 ## Version management
 
-The dedicated working directory is `/home/huibingyu/rl/slime-4b`, a Git worktree
-sharing the original Slime repository history. Its branch is
-`research/qwen3-4b-w4a8`; the completed baseline tag is
-`qwen3-4b-w4a8-v1-20261030`.
+The experiment branch is `research/qwen3-4b-w4a8`; the completed baseline tag
+is `qwen3-4b-w4a8-v1-20261030`. Run Git commands from your repository root:
 
 ```bash
-cd /home/huibingyu/rl/slime-4b
 git status
 git log --oneline -10
 ```
 
-Create future changes from this directory and commit selected code/configuration
-paths. `origin` currently identifies the official Slime upstream. A personal
-GitHub/GitLab destination must be configured before publishing this branch.
+Commit the code/configuration paths related to each change and check
+`git remote -v` before publishing the branch.
 
-## Artifacts and reuse
+## Checkpoints and reuse
 
-- Formal run root:
-  `/data2/huibingyu/nvfp4-sim/qwen3-4b-w4a8-20261029-r2`.
-- Checkpoints: `checkpoints/{bf16,w4a8}/{last,best}` beneath that run root.
-  Each complete resumable last is about 52.45 GiB. Each HF BF16 weights-only
-  best is about 7.51 GiB including tokenizer/configuration files.
-- Final PDFs: `/home/huibingyu/reports/`.
-- Report scripts, scalar exports and supporting files:
-  `/home/huibingyu/report-archive/20261030-qwen3-4b-curves/`.
+Each complete resumable last is about 52.45 GiB. Each HF BF16 weights-only
+best is about 7.51 GiB including tokenizer/configuration files. A best export
+stores BF16 weights; W4A8 evaluation requires explicitly enabling the
+quantization adapters when loading it.
 
-Model weights, datasets, checkpoints, TensorBoard events and generated report
-artifacts stay outside Git. A best export stores BF16 weights; W4A8 evaluation
-requires explicitly enabling the quantization adapters when loading it.
+The result index records paths used by the completed experiment for provenance.
+New runs choose their own model, output and checkpoint locations through
+`--model`, `--output` and `--checkpoints`.
 
 The completed experiment's smoke/test artifacts, caches and containers were
 cleaned after use. Its historical resume-after-validation shortcuts therefore
@@ -108,9 +100,9 @@ For example, planning a new two-GPU run does not start training:
 
 ```bash
 python3 examples/w4a8_sim/prepare_qwen3_4b.py \
-  --model /data3/huibingyu/models/Qwen3-4B \
-  --output /data2/huibingyu/nvfp4-sim/qwen3-4b-w4a8-new-run \
-  --checkpoints /data2/huibingyu/nvfp4-sim/qwen3-4b-w4a8-new-run/checkpoints \
+  --model /path/to/Qwen3-4B \
+  --output /path/to/experiment \
+  --checkpoints /path/to/checkpoints \
   --gpus 1 2
 ```
 

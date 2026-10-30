@@ -1,15 +1,12 @@
 # Qwen3-4B 低精度训练研究
 
-当前工作区：`/home/huibingyu/rl/slime-4b`。
-分支：`research/qwen3-4b-w4a8`。目前仅在本地整理和提交。
-
 本项目在 Slime 中实现线性层 NVFP4 W4A8 数值模拟，并与原生 BF16 训练对照。
 两组各 100 次更新和最终评估已完成。正式实验的原始代码版本保存在标签
 `qwen3-4b-w4a8-v1-20261030`；后续整理使用新的提交，保留完整历史。
 
 ## 从哪里开始
 
-- [4B 实验指南](examples/w4a8_sim/QWEN3_4B.md)：精度范围、训练设置、结果、checkpoint 和数据位置。
+- [4B 实验指南](examples/w4a8_sim/QWEN3_4B.md)：精度范围、训练设置、结果和 checkpoint 保存恢复。
 - [脚本索引](examples/w4a8_sim/README.md)：准备、验证、训练、监控各入口的用途。
 - [正式配置与结果索引](examples/w4a8_sim/experiments/qwen3_4b_20261030.json)：
   实际命令、环境、数据哈希、原始代码版本和五次评估。
@@ -39,25 +36,14 @@
 FA 的 QK、softmax、PV 保持基线精度。这一版本的范围是自定义线性层 W4A8，
 尚未实现 FA 核心低精度训练或 NVIDIA 默认 W4A4 的完整训练配方。
 
-## 文件存放约定
-
-- Git：代码、测试、文档、小型配置和正式实验结果索引。
-- 数据盘：模型、数据集、checkpoint、原始日志和 TensorBoard 事件。
-- `/home/huibingyu/reports/`：最终 PDF。
-- `/home/huibingyu/report-archive/`：报告源码、图表、数据导出和其他附属物。
-
-运行后的临时验证产物在使用完毕且确认无任务依赖后清理。正式 best/last、
-原始结果和对应代码版本保留。历史机器路径记录在正式实验索引中；启动脚本
-目前仍以本机 Slime Docker 环境为基础，换机器前需要检查挂载目录和运行镜像。
-
 ## 日常版本管理
 
+在仓库根目录执行：
+
 ```bash
-cd /home/huibingyu/rl/slime-4b
 git status
 git diff
 git log --oneline -10
 ```
 
-修改后只提交本次相关路径。模型、checkpoint 和事件文件由 `.gitignore` 排除，
-正式实验目录保持在仓库外。
+提交前通过 `git diff` 确认本次变更范围。
