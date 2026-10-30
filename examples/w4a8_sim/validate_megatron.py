@@ -43,37 +43,71 @@ def main():
     parallel_state.initialize_model_parallel(expert_model_parallel_size=1 if args.dense else world)
     model_parallel_cuda_manual_seed(42)
     config = TransformerConfig(
-        num_layers=2, hidden_size=128, num_attention_heads=2, num_query_groups=1,
-        ffn_hidden_size=128, num_moe_experts=None if args.dense else 4, moe_ffn_hidden_size=None if args.dense else 128,
-        moe_router_topk=2, moe_router_dtype="fp32", moe_grouped_gemm=True,
-        moe_token_dispatcher_type="alltoall", expert_model_parallel_size=1 if args.dense else world,
-        expert_tensor_parallel_size=1, bf16=True, params_dtype=torch.bfloat16,
-        normalization="RMSNorm", qk_layernorm=True, add_bias_linear=False,
-        gated_linear_unit=True, activation_func=F.silu, gradient_accumulation_fusion=True,
-        hidden_dropout=0.0, attention_dropout=0.0, moe_aux_loss_coeff=0.0,
+        num_layers=2,
+        hidden_size=128,
+        num_attention_heads=2,
+        num_query_groups=1,
+        ffn_hidden_size=128,
+        num_moe_experts=None if args.dense else 4,
+        moe_ffn_hidden_size=None if args.dense else 128,
+        moe_router_topk=2,
+        moe_router_dtype="fp32",
+        moe_grouped_gemm=True,
+        moe_token_dispatcher_type="alltoall",
+        expert_model_parallel_size=1 if args.dense else world,
+        expert_tensor_parallel_size=1,
+        bf16=True,
+        params_dtype=torch.bfloat16,
+        normalization="RMSNorm",
+        qk_layernorm=True,
+        add_bias_linear=False,
+        gated_linear_unit=True,
+        activation_func=F.silu,
+        gradient_accumulation_fusion=True,
+        hidden_dropout=0.0,
+        attention_dropout=0.0,
+        moe_aux_loss_coeff=0.0,
     )
-    model = GPTModel(config=config,
+    model = GPTModel(
+        config=config,
         transformer_layer_spec=get_gpt_layer_with_transformer_engine_spec(
-            num_experts=None if args.dense else 4, moe_grouped_gemm=True, qk_layernorm=True),
-        vocab_size=256, max_sequence_length=32, share_embeddings_and_output_weights=args.dense,
-        position_embedding_type="rope").cuda()
+            num_experts=None if args.dense else 4, moe_grouped_gemm=True, qk_layernorm=True
+        ),
+        vocab_size=256,
+        max_sequence_length=32,
+        share_embeddings_and_output_weights=args.dense,
+        position_embedding_type="rope",
+    ).cuda()
     original_keys = set(model.state_dict())
     install(model)
     assert set(model.state_dict()) == original_keys
-    ddp = DistributedDataParallel(config, DistributedDataParallelConfig(
-        grad_reduce_in_fp32=True, overlap_grad_reduce=False, use_distributed_optimizer=True),
-        model, disable_bucketing=True)
-    opt_config = OptimizerConfig(bf16=True, params_dtype=torch.bfloat16,
-        use_distributed_optimizer=True, lr=1e-3, min_lr=1e-3, weight_decay=0.0,
-        optimizer_cpu_offload=True, use_torch_optimizer_for_cpu_offload=True,
+    ddp = DistributedDataParallel(
+        config,
+        DistributedDataParallelConfig(
+            grad_reduce_in_fp32=True, overlap_grad_reduce=False, use_distributed_optimizer=True
+        ),
+        model,
+        disable_bucketing=True,
+    )
+    opt_config = OptimizerConfig(
+        bf16=True,
+        params_dtype=torch.bfloat16,
+        use_distributed_optimizer=True,
+        lr=1e-3,
+        min_lr=1e-3,
+        weight_decay=0.0,
+        optimizer_cpu_offload=True,
+        use_torch_optimizer_for_cpu_offload=True,
         optimizer_offload_fraction=1.0,
         use_precision_aware_optimizer=True,
-        overlap_cpu_optimizer_d2h_h2d=False)
+        overlap_cpu_optimizer_d2h_h2d=False,
+    )
     optimizer = get_megatron_optimizer(opt_config, [ddp])
     if args.audit:
         from w4a8_sim.training_audit import before_step
-        os.environ.update(W4A8_TRAINING_MODE='w4a8',W4A8_TRAINING_AUDIT_DIR=str(args.output/'training-audit'))
-        before_step(SimpleNamespace(num_layers=2),0,0,[ddp],optimizer,None)
+
+        os.environ.update(W4A8_TRAINING_MODE="w4a8", W4A8_TRAINING_AUDIT_DIR=str(args.output / "training-audit"))
+        before_step(SimpleNamespace(num_layers=2), 0, 0, [ddp], optimizer, None)
     for part in getattr(optimizer, "chained_optimizers", [optimizer]):
         assert part.optimizer.offload_fraction == 1.0
         assert part.optimizer.cpu_optimizers and part.optimizer.gpu_optimizer is None
@@ -81,32 +115,44 @@ def main():
     tokens = torch.randint(0, 256, (1, 19), device="cuda", generator=token_generator)
     positions = torch.arange(19, device="cuda").unsqueeze(0)
     mask = torch.triu(torch.ones(1, 1, 19, 19, device="cuda", dtype=torch.bool), diagonal=1)
-    initial = {n:p.detach().clone() for n,p in model.named_parameters()}
+    initial = {n: p.detach().clone() for n, p in model.named_parameters()}
 
     def step():
         ddp.zero_grad_buffer()
         optimizer.zero_grad()
         logits = ddp(tokens, positions, mask)
-        loss = F.cross_entropy(logits.float().reshape(-1,256), tokens.roll(-1,1).reshape(-1))
+        loss = F.cross_entropy(logits.float().reshape(-1, 256), tokens.roll(-1, 1).reshape(-1))
         loss.backward()
         ddp.finish_grad_sync()
         assert all(p.main_grad.isfinite().all() for p in model.parameters() if p.requires_grad)
-        assert any(p.main_grad.norm()>0 for n,p in model.named_parameters() if ".mlp." in n)
+        assert any(p.main_grad.norm() > 0 for n, p in model.named_parameters() if ".mlp." in n)
         success, norm, _ = optimizer.step()
         assert success and torch.isfinite(torch.as_tensor(norm))
         return dict(loss=float(loss.detach()), grad_norm=float(norm))
 
     steps = [step(), step()]
-    assert any(not torch.equal(initial[n],p) for n,p in model.named_parameters() if ".mlp." in n)
-    assert any(not torch.equal(initial[n],p) for n,p in model.named_parameters() if "linear_qkv.weight" in n)
+    assert any(not torch.equal(initial[n], p) for n, p in model.named_parameters() if ".mlp." in n)
+    assert any(not torch.equal(initial[n], p) for n, p in model.named_parameters() if "linear_qkv.weight" in n)
     metadata = {"distrib_optim_sharding_type": "fully_reshardable"}
 
     def checkpoint_state(loading=False):
         state = model.sharded_state_dict()
-        result={"model":state, "optimizer":optimizer.sharded_state_dict(state, is_loading=loading, metadata=metadata)}
+        result = {
+            "model": state,
+            "optimizer": optimizer.sharded_state_dict(state, is_loading=loading, metadata=metadata),
+        }
         if args.dense:
-            result.update(iteration=1,args=SimpleNamespace(num_layers=2,num_query_groups=1,
-                num_attention_heads=2,kv_channels=64,hidden_size=128,vocab_size=256))
+            result.update(
+                iteration=1,
+                args=SimpleNamespace(
+                    num_layers=2,
+                    num_query_groups=1,
+                    num_attention_heads=2,
+                    kv_channels=64,
+                    hidden_size=128,
+                    vocab_size=256,
+                ),
+            )
         return result
 
     def optimizer_tensors():
@@ -119,7 +165,7 @@ def main():
                 for k, parameter in enumerate(group["params"]):
                     for name, value in inner.state.get(parameter, {}).items():
                         if isinstance(value, torch.Tensor):
-                            assert value.device.type == "cpu", (name,value.device)
+                            assert value.device.type == "cpu", (name, value.device)
                             result[f"{i}/{j}/{k}/{name}"] = value.detach().cpu().clone()
         return result
 
@@ -130,62 +176,100 @@ def main():
     dist.barrier()
     dist_checkpointing.save(checkpoint_state(), str(path))
     if args.dense:
-        if rank==0:
+        if rank == 0:
             from transformers import Qwen3Config, Qwen3ForCausalLM
-            origin=args.output/'original-tiny'
-            hf_model=Qwen3ForCausalLM(Qwen3Config(vocab_size=256,hidden_size=128,
-                intermediate_size=128,num_hidden_layers=2,num_attention_heads=2,
-                num_key_value_heads=1,head_dim=64,max_position_embeddings=32,
-                tie_word_embeddings=True)).bfloat16()
+
+            origin = args.output / "original-tiny"
+            hf_model = Qwen3ForCausalLM(
+                Qwen3Config(
+                    vocab_size=256,
+                    hidden_size=128,
+                    intermediate_size=128,
+                    num_hidden_layers=2,
+                    num_attention_heads=2,
+                    num_key_value_heads=1,
+                    head_dim=64,
+                    max_position_embeddings=32,
+                    tie_word_embeddings=True,
+                )
+            ).bfloat16()
             hf_model.save_pretrained(origin)
             del hf_model
-            subprocess.run([sys.executable,'/quant/examples/nvfp4_sim/export_diagnostic_hf.py',
-                '--input',str(path),'--origin',str(origin),'--output',str(args.output/'best-weights')],
-                env=dict(os.environ,CUDA_VISIBLE_DEVICES=''),check=True)
-            best=json.loads((args.output/'best-weights/export-validation.json').read_text())
-            assert best['passed'] and best['optimizer_exported'] is False and best['tied_embeddings']
+            subprocess.run(
+                [
+                    sys.executable,
+                    "/quant/examples/nvfp4_sim/export_diagnostic_hf.py",
+                    "--input",
+                    str(path),
+                    "--origin",
+                    str(origin),
+                    "--output",
+                    str(args.output / "best-weights"),
+                ],
+                env=dict(os.environ, CUDA_VISIBLE_DEVICES=""),
+                check=True,
+            )
+            best = json.loads((args.output / "best-weights/export-validation.json").read_text())
+            assert best["passed"] and best["optimizer_exported"] is False and best["tied_embeddings"]
         dist.barrier()
-    saved_parameters = {n:p.detach().cpu().clone() for n,p in model.named_parameters()}
+    saved_parameters = {n: p.detach().cpu().clone() for n, p in model.named_parameters()}
     saved_optimizer = optimizer_tensors()
     saved_rng = torch.cuda.get_rng_state()
     expected_step = step()
-    expected = {n:p.detach().cpu().clone() for n,p in model.named_parameters()}
+    expected = {n: p.detach().cpu().clone() for n, p in model.named_parameters()}
     restored = dist_checkpointing.load(checkpoint_state(loading=True), str(path))
     model.load_state_dict(restored["model"])
     optimizer.load_state_dict(restored["optimizer"])
     restored_optimizer = optimizer_tensors()
-    diffs = {k:float((v-restored_optimizer[k]).abs().max()) for k,v in saved_optimizer.items()}
-    model_diffs = {n:float((p.detach().cpu()-saved_parameters[n]).abs().max()) for n,p in model.named_parameters()}
-    diagnostic = dict(optimizer_keys=list(saved_optimizer),optimizer_max_difference=diffs,model_max_difference=model_diffs,
-                      expected_step=expected_step)
-    (args.output/f"resume-audit-rank-{rank}.json").write_text(json.dumps(diagnostic,indent=2)+"\n")
-    assert saved_optimizer and all(d==0 for d in diffs.values()), diffs
-    assert all(d==0 for d in model_diffs.values()), model_diffs
+    diffs = {k: float((v - restored_optimizer[k]).abs().max()) for k, v in saved_optimizer.items()}
+    model_diffs = {n: float((p.detach().cpu() - saved_parameters[n]).abs().max()) for n, p in model.named_parameters()}
+    diagnostic = dict(
+        optimizer_keys=list(saved_optimizer),
+        optimizer_max_difference=diffs,
+        model_max_difference=model_diffs,
+        expected_step=expected_step,
+    )
+    (args.output / f"resume-audit-rank-{rank}.json").write_text(json.dumps(diagnostic, indent=2) + "\n")
+    assert saved_optimizer and all(d == 0 for d in diffs.values()), diffs
+    assert all(d == 0 for d in model_diffs.values()), model_diffs
     torch.cuda.set_rng_state(saved_rng)
     resumed_step = step()
     diagnostic["resumed_step"] = resumed_step
-    (args.output/f"resume-audit-rank-{rank}.json").write_text(json.dumps(diagnostic,indent=2)+"\n")
+    (args.output / f"resume-audit-rank-{rank}.json").write_text(json.dumps(diagnostic, indent=2) + "\n")
     for name, parameter in model.named_parameters():
         torch.testing.assert_close(parameter.detach().cpu(), expected[name], rtol=0, atol=0)
     counters = dict(model._w4a8_recipe.counters)
-    assert all(counters.get(k,0)>0 for k in ("fprop","dgrad","wgrad","activation_e4m3","gradient_e5m2","weight_nvfp4"))
+    assert all(
+        counters.get(k, 0) > 0 for k in ("fprop", "dgrad", "wgrad", "activation_e4m3", "gradient_e5m2", "weight_nvfp4")
+    )
     qkv = model.decoder.layers[0].self_attention.linear_qkv.weight
-    report = dict(passed=True, rank=rank, world_size=world, expert_parallel_size=1 if args.dense else world,
-        dense=args.dense, tied_embeddings=args.dense,
-        steps=steps, expected_step=expected_step, resumed_step=resumed_step,
-        exact_optimizer_resume=True, full_distributed_checkpoint=True, cpu_optimizer_offload=True,
-        counters=counters, projection_modules=list(model._w4a8_modules),
+    report = dict(
+        passed=True,
+        rank=rank,
+        world_size=world,
+        expert_parallel_size=1 if args.dense else world,
+        dense=args.dense,
+        tied_embeddings=args.dense,
+        steps=steps,
+        expected_step=expected_step,
+        resumed_step=resumed_step,
+        exact_optimizer_resume=True,
+        full_distributed_checkpoint=True,
+        cpu_optimizer_offload=True,
+        counters=counters,
+        projection_modules=list(model._w4a8_modules),
         expert_modules=list(model._w4a8_grouped_modules),
-        qkv_sha256=hashlib.sha256(qkv.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes()).hexdigest())
-    (args.output/f"validation-rank-{rank}.json").write_text(json.dumps(report,indent=2)+"\n")
-    reports = [None]*world
+        qkv_sha256=hashlib.sha256(qkv.detach().cpu().contiguous().view(torch.uint8).numpy().tobytes()).hexdigest(),
+    )
+    (args.output / f"validation-rank-{rank}.json").write_text(json.dumps(report, indent=2) + "\n")
+    reports = [None] * world
     dist.all_gather_object(reports, report)
     assert len({r["qkv_sha256"] for r in reports}) == 1
-    if rank==0:
-        (args.output/"validation.json").write_text(json.dumps(dict(passed=True,ranks=reports),indent=2)+"\n")
+    if rank == 0:
+        (args.output / "validation.json").write_text(json.dumps(dict(passed=True, ranks=reports), indent=2) + "\n")
     parallel_state.destroy_model_parallel()
     dist.destroy_process_group()
 
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()

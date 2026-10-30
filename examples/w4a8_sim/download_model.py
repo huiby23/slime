@@ -12,8 +12,8 @@ from urllib.parse import quote
 
 
 def publish_status(path, status):
-    temporary=path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(status,indent=2)+'\n')
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(status, indent=2) + "\n")
     temporary.replace(path)
 
 
@@ -26,14 +26,14 @@ def main():
     parser.add_argument("--workers", type=int, default=2)
     args = parser.parse_args()
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    status = {"model": args.model, "source":args.source, "destination": str(args.destination), "completed": False}
-    publish_status(args.report,status)
+    status = {"model": args.model, "source": args.source, "destination": str(args.destination), "completed": False}
+    publish_status(args.report, status)
     try:
         metadata_path = args.report.parent / ("model-info-" + args.source + ".json")
         if args.source == "modelscope":
-            url = f'https://modelscope.cn/api/v1/models/{args.model}/repo/files?Revision=master&Recursive=true'
+            url = f"https://modelscope.cn/api/v1/models/{args.model}/repo/files?Revision=master&Recursive=true"
         else:
-            url = 'https://huggingface.co/api/models/' + args.model + '?blobs=true'
+            url = "https://huggingface.co/api/models/" + args.model + "?blobs=true"
         if metadata_path.exists():
             raw = metadata_path.read_bytes()
         else:
@@ -44,22 +44,35 @@ def main():
             if not info.get("Success"):
                 raise RuntimeError("ModelScope metadata request did not succeed")
             files = info["Data"]["Files"]
-            info = {"sha":hashlib.sha256(raw).hexdigest(), "siblings":[
-                {"rfilename":f["Path"],"size":f["Size"],"lfs":{"sha256":f["Sha256"]},"revision":f["Revision"]}
-                for f in files if f["Type"]=="blob"]}
+            info = {
+                "sha": hashlib.sha256(raw).hexdigest(),
+                "siblings": [
+                    {
+                        "rfilename": f["Path"],
+                        "size": f["Size"],
+                        "lfs": {"sha256": f["Sha256"]},
+                        "revision": f["Revision"],
+                    }
+                    for f in files
+                    if f["Type"] == "blob"
+                ],
+            }
             # Existing HF metadata may be reused only when it is byte-identical
             # to the pinned official mirror artifacts.
             for f in info["siblings"]:
-                existing = args.destination/f["rfilename"]
-                if existing.is_file() and existing.suffix==".json":
-                    if hashlib.sha256(existing.read_bytes()).hexdigest()!=f['lfs']['sha256']:
+                existing = args.destination / f["rfilename"]
+                if existing.is_file() and existing.suffix == ".json":
+                    if hashlib.sha256(existing.read_bytes()).hexdigest() != f["lfs"]["sha256"]:
                         raise RuntimeError(f"Existing initialization metadata differs: {existing.name}")
         status["revision"] = info["sha"]
         status["started_at"] = datetime.now(timezone.utc).isoformat()
-        publish_status(args.report,status)
+        publish_status(args.report, status)
         args.destination.mkdir(parents=True, exist_ok=True)
         patterns = ["*.json", "*.safetensors", "*.model", "*.txt", "*.jinja"]
-        selected = [f for f in info["siblings"] if any(fnmatch.fnmatch(f["rfilename"], pattern) for pattern in patterns)]
+        selected = [
+            f for f in info["siblings"] if any(fnmatch.fnmatch(f["rfilename"], pattern) for pattern in patterns)
+        ]
+
         def download(file):
             name = file["rfilename"]
             if Path(name).is_absolute() or ".." in Path(name).parts:
@@ -69,13 +82,32 @@ def main():
             partial = destination.with_name(destination.name + ".partial")
             expected = file.get("size")
             if not destination.exists() or (expected is not None and destination.stat().st_size != expected):
-                if args.source=="modelscope":
-                    url=f'https://modelscope.cn/api/v1/models/{args.model}/repo?Revision={file["revision"]}&FilePath={quote(name)}'
+                if args.source == "modelscope":
+                    url = f'https://modelscope.cn/api/v1/models/{args.model}/repo?Revision={file["revision"]}&FilePath={quote(name)}'
                 else:
                     url = f'https://huggingface.co/{args.model}/resolve/{info["sha"]}/{quote(name)}?download=true'
-                subprocess.run(["curl", "-fLsS", "--retry", "3", "--connect-timeout", "10", "--max-time", "7200",
-                                "--speed-limit", "1024", "--speed-time", "60",
-                                "--continue-at", "-", "--output", str(partial), url], check=True)
+                subprocess.run(
+                    [
+                        "curl",
+                        "-fLsS",
+                        "--retry",
+                        "3",
+                        "--connect-timeout",
+                        "10",
+                        "--max-time",
+                        "7200",
+                        "--speed-limit",
+                        "1024",
+                        "--speed-time",
+                        "60",
+                        "--continue-at",
+                        "-",
+                        "--output",
+                        str(partial),
+                        url,
+                    ],
+                    check=True,
+                )
                 if expected is not None and partial.stat().st_size != expected:
                     raise RuntimeError(f"Incomplete model artifact: {name}")
                 partial.replace(destination)
@@ -89,6 +121,7 @@ def main():
                 if actual != digest:
                     raise RuntimeError(f"Weight checksum mismatch: {name}")
             print(f"verified {name}", flush=True)
+
         # Pin and fetch metadata before large weights, so configuration preflight
         # can proceed while weights download. Curl also honors the host proxy.
         for file in selected:
@@ -103,13 +136,16 @@ def main():
         missing = [name for name in set(index["weight_map"].values()) if not (args.destination / name).is_file()]
         if missing:
             raise RuntimeError(f"Missing weight shards: {missing}")
-        status.update(completed=True, weight_bytes=index["metadata"]["total_size"],
-                      completed_at=datetime.now(timezone.utc).isoformat())
+        status.update(
+            completed=True,
+            weight_bytes=index["metadata"]["total_size"],
+            completed_at=datetime.now(timezone.utc).isoformat(),
+        )
     except Exception as exc:
         status["error"] = f"{type(exc).__name__}: {exc}"
         raise
     finally:
-        publish_status(args.report,status)
+        publish_status(args.report, status)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,9 @@ from slime_plugins.w4a8_sim.recipe import W4A8Recipe, fp8_quantize, grouped_line
 NUM_GPUS = 0
 
 
-@pytest.mark.parametrize("format,dtype,maximum", [("e4m3", torch.float8_e4m3fn, 448), ("e5m2", torch.float8_e5m2, 57344)])
+@pytest.mark.parametrize(
+    "format,dtype,maximum", [("e4m3", torch.float8_e4m3fn, 448), ("e5m2", torch.float8_e5m2, 57344)]
+)
 def test_fp8_payload_matches_native_conversion(format, dtype, maximum):
     torch.manual_seed(42)
     x = torch.randn(7, 197) * 3
@@ -85,7 +87,7 @@ def test_routing_and_weighted_combination_preserve_selected_experts():
     for token in range(5):
         for slot in range(2):
             expert = ids[token, slot]
-            a, b = linear(x[token:token+1], w13[expert], recipe=W4A8Recipe()).chunk(2, -1)
+            a, b = linear(x[token : token + 1], w13[expert], recipe=W4A8Recipe()).chunk(2, -1)
             y = linear(F.silu(a) * b, w2[expert], recipe=W4A8Recipe())
             reference[token] += y[0].float() * probabilities[token, slot]
     torch.testing.assert_close(result, reference.bfloat16(), atol=0, rtol=0)
@@ -96,12 +98,17 @@ def test_logical_weight_amax_preserves_quantization_across_tp_shards():
     w = torch.randn(64, 768).bfloat16()
     w[:, :192] *= 20
     whole = quantize(w, weight=True).dequantize()
-    pieces = [quantize(part, weight=True, tensor_amax=w.abs().float().amax()).dequantize()
-              for part in w.split(192, dim=1)]
+    pieces = [
+        quantize(part, weight=True, tensor_amax=w.abs().float().amax()).dequantize() for part in w.split(192, dim=1)
+    ]
     torch.testing.assert_close(torch.cat(pieces, dim=1), whole, rtol=0, atol=0)
     x = torch.randn(9, 768).bfloat16()
-    torch.testing.assert_close(torch.cat([fp8_quantize(part).dequantize() for part in x.split(192, dim=1)], dim=1),
-                               fp8_quantize(x).dequantize(), rtol=0, atol=0)
+    torch.testing.assert_close(
+        torch.cat([fp8_quantize(part).dequantize() for part in x.split(192, dim=1)], dim=1),
+        fp8_quantize(x).dequantize(),
+        rtol=0,
+        atol=0,
+    )
 
 
 def test_weight_amax_cache_requires_explicit_loader_invalidation():
@@ -119,9 +126,12 @@ def test_weight_amax_cache_requires_explicit_loader_invalidation():
 def test_reject_bad_expert_splits():
     with pytest.raises(ValueError, match="splits"):
         grouped_linear(torch.zeros(3, 32).bfloat16(), [torch.zeros(32, 32).bfloat16()], [2], recipe=W4A8Recipe())
+
+
 def test_inference_weight_cache_preserves_values_and_invalidates_hot_updates():
     import torch
     from slime_plugins.w4a8_sim.recipe import W4A8Recipe
+
     cached = W4A8Recipe(cache_inference_weights=True)
     reference = W4A8Recipe()
     w = torch.randn(48, 64).bfloat16()
@@ -134,4 +144,4 @@ def test_inference_weight_cache_preserves_values_and_invalidates_hot_updates():
         second = cached.weight(w)
         torch.testing.assert_close(second, reference.weight(w), rtol=0, atol=0)
         assert not torch.equal(first, second)
-        assert cached.counters['weight_cache_hits'] == 1
+        assert cached.counters["weight_cache_hits"] == 1

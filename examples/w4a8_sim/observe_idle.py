@@ -20,8 +20,14 @@ def main():
     while time.monotonic() < deadline:
         now = time.monotonic()
         try:
-            raw = subprocess.check_output(["nvidia-smi", "--query-gpu=index,uuid,memory.used,utilization.gpu", "--format=csv,noheader,nounits"], text=True, timeout=10)
-            processes = subprocess.check_output(["nvidia-smi", "--query-compute-apps=gpu_uuid,pid", "--format=csv,noheader"], text=True, timeout=10)
+            raw = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=index,uuid,memory.used,utilization.gpu", "--format=csv,noheader,nounits"],
+                text=True,
+                timeout=10,
+            )
+            processes = subprocess.check_output(
+                ["nvidia-smi", "--query-compute-apps=gpu_uuid,pid", "--format=csv,noheader"], text=True, timeout=10
+            )
             busy = {line.split(",")[0].strip() for line in processes.splitlines() if "," in line}
             rows = []
             if last is not None and now - last > 15:
@@ -37,10 +43,22 @@ def main():
                 else:
                     since.setdefault(index, now)
                 elapsed = now - since.get(index, now)
-                rows.append(dict(index=index, uuid=uuid, memory_mib=float(memory), utilization=float(util),
-                                 idle=idle, continuous_idle_seconds=elapsed, qualified=idle and elapsed > 300))
-            report = {"at": datetime.now(timezone.utc).isoformat(), "gpus": rows,
-                      "all_qualified": len(rows) == len(args.gpus) and all(r["qualified"] for r in rows)}
+                rows.append(
+                    dict(
+                        index=index,
+                        uuid=uuid,
+                        memory_mib=float(memory),
+                        utilization=float(util),
+                        idle=idle,
+                        continuous_idle_seconds=elapsed,
+                        qualified=idle and elapsed > 300,
+                    )
+                )
+            report = {
+                "at": datetime.now(timezone.utc).isoformat(),
+                "gpus": rows,
+                "all_qualified": len(rows) == len(args.gpus) and all(r["qualified"] for r in rows),
+            }
             last = now
         except Exception as exc:
             since.clear()

@@ -31,8 +31,9 @@ class FP8Tensor:
     def dequantize(self):
         rows, columns = self.shape
         padded = self.values.shape[1]
-        return (self.values.float().reshape(rows, padded // self.block_size, self.block_size)
-                * self.scales[..., None]).reshape(rows, padded)[:, :columns]
+        return (
+            self.values.float().reshape(rows, padded // self.block_size, self.block_size) * self.scales[..., None]
+        ).reshape(rows, padded)[:, :columns]
 
 
 @torch.no_grad()
@@ -52,7 +53,7 @@ def fp8_quantize(tensor, *, format="e4m3", block_size=64):
     scales = torch.where(scales == 0, torch.ones_like(scales), scales)
     scaled = blocks / scales[..., None]
     mag = scaled.abs().clamp_max(maximum)
-    exponent = torch.floor(torch.log2(mag.clamp_min(2.0 ** emin))).clamp_min(emin)
+    exponent = torch.floor(torch.log2(mag.clamp_min(2.0**emin))).clamp_min(emin)
     step = torch.exp2(exponent - mantissa)
     payload = torch.copysign((torch.round(mag / step) * step).clamp_max(maximum), scaled)
     return FP8Tensor(payload.reshape_as(x).bfloat16(), scales, (rows, columns), block_size, format)
@@ -170,8 +171,9 @@ def grouped_linear(x, weights, splits, *, recipe):
     if len(weights) != len(splits) or min(splits, default=0) < 0 or sum(splits) != x.shape[0]:
         raise ValueError("Expert splits do not match inputs and weights")
     recipe.counters["expert_nonempty_fprop"] += sum(n > 0 for n in splits)
-    return torch.cat([linear(part, weight, recipe=recipe)
-                      for part, weight in zip(x.split(splits), weights, strict=True)], dim=0)
+    return torch.cat(
+        [linear(part, weight, recipe=recipe) for part, weight in zip(x.split(splits), weights, strict=True)], dim=0
+    )
 
 
 @torch.no_grad()

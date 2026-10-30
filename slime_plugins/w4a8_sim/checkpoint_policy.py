@@ -15,7 +15,13 @@ import uuid
 from pathlib import Path
 
 try:
-    from slime_plugins.nvfp4_sim.checkpoint_policy import atomic_json, _point, _state, set_trainer_save, set_rollout_save
+    from slime_plugins.nvfp4_sim.checkpoint_policy import (
+        atomic_json,
+        _point,
+        _state,
+        set_trainer_save,
+        set_rollout_save,
+    )
 except ModuleNotFoundError:
     from nvfp4_sim.checkpoint_policy import atomic_json, _point, _state, set_trainer_save, set_rollout_save
 
@@ -98,8 +104,10 @@ def publish_last(root, pending, rollout_id):
     root.mkdir(parents=True, exist_ok=True)
     _point(root, "last", target)
     state = _state(root)
-    state.update(last={"rollout_id": rollout_id, "completed_updates": rollout_id + 1, "snapshot": str(target)},
-                 policy="best-last-multiple-filesystems")
+    state.update(
+        last={"rollout_id": rollout_id, "completed_updates": rollout_id + 1, "snapshot": str(target)},
+        policy="best-last-multiple-filesystems",
+    )
     atomic_json(root / "checkpoint-policy.json", state)
     prune(root)
     return target
@@ -118,8 +126,13 @@ def record_evaluation(root, rollout_id, score, questions):
         if os.environ.get("W4A8_BEST_WEIGHTS_ONLY") == "1":
             destination = export_best_weights(root, last)
             _point(root, "best", destination)
-            state["best"] = dict(evaluation, completed_updates=rollout_id + 1,
-                snapshot=str(destination), format="hf-bf16-weights", optimizer_included=False)
+            state["best"] = dict(
+                evaluation,
+                completed_updates=rollout_id + 1,
+                snapshot=str(destination),
+                format="hf-bf16-weights",
+                optimizer_included=False,
+            )
         else:
             _point(root, "best", Path(last["snapshot"]))
             state["best"] = dict(last, **evaluation)
@@ -141,17 +154,34 @@ def export_best_weights(root, last):
     step = last["rollout_id"]
     source = Path(last["snapshot"]) / f"iter_{step:07d}"
     environment = dict(os.environ, CUDA_VISIBLE_DEVICES="", OMP_NUM_THREADS="4")
-    subprocess.run([sys.executable, str(script), "--input", str(source), "--origin",
-        os.environ["W4A8_INITIAL_MODEL"], "--output", str(pending)], env=environment, check=True)
+    subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--input",
+            str(source),
+            "--origin",
+            os.environ["W4A8_INITIAL_MODEL"],
+            "--output",
+            str(pending),
+        ],
+        env=environment,
+        check=True,
+    )
     report = json.loads((pending / "export-validation.json").read_text())
     if not report.get("passed") or report.get("optimizer_exported") is not False:
         raise RuntimeError("Best export did not pass weight-only validation")
     if report["iteration"] != step or not (pending / "model.safetensors").is_file():
         raise RuntimeError("Best export does not match the selected trained step")
-    atomic_json(pending / "precision-policy.json", dict(
-        training_mode=os.environ.get("W4A8_TRAINING_MODE", "w4a8"),
-        stored_weight_dtype="bfloat16", optimizer_included=False,
-        inference_requires_explicit_precision_selection=True))
+    atomic_json(
+        pending / "precision-policy.json",
+        dict(
+            training_mode=os.environ.get("W4A8_TRAINING_MODE", "w4a8"),
+            stored_weight_dtype="bfloat16",
+            optimizer_included=False,
+            inference_requires_explicit_precision_selection=True,
+        ),
+    )
     target = pending.parent / f"best_step_{step:07d}"
     if target.exists():
         raise FileExistsError(target)

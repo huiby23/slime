@@ -78,10 +78,22 @@ def model_provider(pre_process=True, post_process=True, vp_stage=None):
     from slime.backends.megatron_utils.model_provider import _get_model_provider_func
 
     args = get_args()
-    for name in ("tensor_model_parallel_size", "pipeline_model_parallel_size", "context_parallel_size", "expert_tensor_parallel_size"):
+    for name in (
+        "tensor_model_parallel_size",
+        "pipeline_model_parallel_size",
+        "context_parallel_size",
+        "expert_tensor_parallel_size",
+    ):
         if getattr(args, name, 1) != 1:
             raise ValueError(f"W4A8 requires {name}=1; expert parallelism is supported")
-    for name in ("fp4", "fp8", "sequence_parallel", "delay_wgrad_compute", "tp_comm_overlap", "moe_single_grouped_weight"):
+    for name in (
+        "fp4",
+        "fp8",
+        "sequence_parallel",
+        "delay_wgrad_compute",
+        "tp_comm_overlap",
+        "moe_single_grouped_weight",
+    ):
         if getattr(args, name, None):
             raise ValueError(f"Disable {name} for W4A8 numerical simulation")
     if getattr(args, "num_experts", None) and not args.moe_grouped_gemm:
