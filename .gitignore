@@ -198,3 +198,12 @@ _examples_synced/
 # Local straw verification output and cross-project coordination
 /benchmark-results/
 /STRAW_COORDINATION.md
+
+# Local model/checkpoint/event artifacts; version code and small configurations.
+/models/
+/checkpoints/
+/runs/
+/artifacts/
+*.safetensors
+*.distcp
+events.out.tfevents.*

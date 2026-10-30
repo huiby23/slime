@@ -1,4 +1,10 @@
-# Qwen3-30B-A3B W4A8 numerical training simulation
+# Qwen3 W4A8 numerical training simulation
+
+For the completed Qwen3-4B experiment, code entry points, Git workflow and
+recorded formal configuration, start with [QWEN3_4B.md](QWEN3_4B.md).
+Both 100-update formal arms and their final 512-question evaluations completed
+on 2026-10-30. The sections below also retain the earlier implementation and
+30B MoE preparation history.
 
 ## Current experiment: Qwen3-4B Dense (2026-10-29)
 
