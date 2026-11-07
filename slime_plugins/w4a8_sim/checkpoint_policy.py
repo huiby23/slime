@@ -15,6 +15,11 @@ import uuid
 from pathlib import Path
 
 try:
+    from slime_plugins.w4a8_sim.metrics import log_eval
+except ModuleNotFoundError:
+    from w4a8_sim.metrics import log_eval
+
+try:
     from slime_plugins.nvfp4_sim.checkpoint_policy import (
         atomic_json,
         _point,
@@ -190,8 +195,12 @@ def export_best_weights(root, last):
 
 
 def eval_log_hook(rollout_id, args, data, extra_metrics=None):
-    rewards = data["gsm8k"]["rewards"]
+    if len(data) != 1:
+        raise ValueError("Expected exactly one evaluation dataset")
+    result = next(iter(data.values()))
+    rewards = result["rewards"]
     record_evaluation(args.save, rollout_id, sum(rewards) / len(rewards), len(rewards))
+    log_eval(rollout_id, args, data, extra_metrics)
     return False
 
 

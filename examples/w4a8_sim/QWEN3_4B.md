@@ -1,9 +1,9 @@
 # Qwen3-4B BF16 and NVFP4 W4A8 experiment
 
-This branch records the completed 100-update Qwen3-4B comparison. The full
-Slime source, quantization implementation, adapters, launch tools and tests are
-versioned here. The exact formal commands, environment, data hashes, source
-revisions and results are in
+New runs use 50 rollouts and evaluate before training and every 5 rollouts,
+including the final update. The full Slime source, quantization implementation,
+adapters, launch tools and tests are versioned here. The exact historical formal
+commands, environment, data hashes, source revisions and results are in
 [experiments/qwen3_4b_20261030.json](experiments/qwen3_4b_20261030.json).
 
 ## Precision and scope
@@ -40,10 +40,16 @@ and native FP4 performance are outside this version's implemented scope.
 
 Both arms used seed 42, TP=1 and DP=2, with two colocated TP=1 rollout engines.
 BF16 used physical GPUs 0/6 and W4A8 used 2/6, with matching parallel topology.
-Each update sampled eight prompts with
-eight answers each, for a global batch of 64. Each arm completed 100 optimizer
-updates. The learning rate was a constant 1e-6, Adam betas were 0.9/0.98,
-weight decay was 0.1, and the maximum response length was 1024 tokens.
+New plans sample ten prompts with two answers each, for a global batch of 20
+and one optimizer update per rollout, matching the earlier 0.6B-Base 10x2 study.
+New plans default to `/data4/yaozhuang/models/Qwen3-4B-Base`; generated Docker
+commands mount it read-only at `/models/Qwen3-4B-Base` and use it for initial
+weights and the tokenizer. Previously generated plans and completed results are unchanged.
+New runs complete 50 optimizer updates and evaluate on the 50-example
+validation set before training and every 5 updates. The validation uses the same 50 questions as the earlier study,
+with one answer per question. The learning rate is a constant 1e-6, Adam betas
+are 0.9/0.98,
+weight decay is 0.1, and the maximum response length is 1024 tokens.
 
 | Own-mode GSM8K validation, 512 questions | Initial | Best | Final |
 | --- | ---: | ---: | ---: |
@@ -88,7 +94,10 @@ quantization adapters when loading it.
 
 The result index records paths used by the completed experiment for provenance.
 New runs choose their own model, output and checkpoint locations through
-`--model`, `--output` and `--checkpoints`.
+`--model`, `--output` and `--checkpoints`. The optional `--attention` selects
+`c16`, `naive-c8`, `naive-c4` or `attn-qat-c4`; the default `none` is an alias
+for the C16 Transformer Engine attention control. Quantization details are in
+`说明.md` at the workspace root.
 
 The completed experiment's smoke/test artifacts, caches and containers were
 cleaned after use. Its historical resume-after-validation shortcuts therefore

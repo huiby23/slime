@@ -21,6 +21,10 @@ if __name__ == "__main__":
     # Slime's rollout logger reads this environment variable rather than the
     # Megatron --tensorboard-dir argument. Ray workers inherit it from raylet.
     os.environ["TENSORBOARD_DIR"] = args.tensorboard_dir
+    if os.environ.get("W4A8_RESUME_METRICS") == "1":
+        from w4a8_sim.metrics import prepare_resume
+
+        prepare_resume(args)
     if os.environ.get("W4A8_ISOLATED_RAY") == "1":
         import ray
 

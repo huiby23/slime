@@ -41,6 +41,18 @@ def test_matched_dense_arms_and_resume_preserve_model_and_data(tmp_path):
     model = model_metadata(tmp_path)
     plan = module("prepare_qwen3_4b").prepare(model, tmp_path / "work", tmp_path / "checkpoints", [0, 1, 2, 3])
 
+    for mode in ["bf16", "w4a8"]:
+        command = plan["arms"][mode]["training_command"]
+        option = lambda name: command[command.index(name) + 1]
+        assert int(option("--num-rollout")) == 50
+        assert int(option("--rollout-batch-size")) == 10
+        assert int(option("--n-samples-per-prompt")) == 2
+        assert int(option("--global-batch-size")) == 20
+        assert int(option("--num-steps-per-rollout")) == 1
+        assert int(option("--eval-interval")) == 5
+        eval_index = command.index("--eval-prompt-data")
+        assert command[eval_index + 2].endswith("validation-50-old-study.jsonl")
+
     def normalized(command):
         result = list(command)
         for flag in [
@@ -77,7 +89,7 @@ def test_matched_dense_arms_and_resume_preserve_model_and_data(tmp_path):
     assert int(option("--rollout-max-response-len")) == 1024
 
 
-@pytest.mark.parametrize("available,train_count", [(3, 2), (7, 4), (8, 8)])
+@pytest.mark.parametrize("available,train_count", [(1, 1), (3, 2), (4, 4), (7, 5), (8, 5)])
 def test_use_every_gpu_for_rollout_without_changing_the_training_batch(tmp_path, available, train_count):
     model = model_metadata(tmp_path)
     plan = module("prepare_qwen3_4b").prepare(
@@ -89,8 +101,10 @@ def test_use_every_gpu_for_rollout_without_changing_the_training_batch(tmp_path,
         option = lambda name: command[command.index(name) + 1]
         assert int(option("--actor-num-gpus-per-node")) == train_count
         assert int(option("--rollout-num-gpus")) == available
-        assert int(option("--global-batch-size")) == 64
-        assert int(option("--rollout-batch-size")) * int(option("--n-samples-per-prompt")) == 64
+        assert int(option("--global-batch-size")) == 20
+        assert int(option("--rollout-batch-size")) == 10
+        assert int(option("--n-samples-per-prompt")) == 2
+        assert int(option("--num-steps-per-rollout")) == 1
         assert arm["environment"]["TENSORBOARD_DIR"] == option("--tensorboard-dir")
 
 

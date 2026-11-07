@@ -9,7 +9,16 @@ import json
 from pathlib import Path
 
 
-def prepare(model, output, checkpoint_root, gpus, updates=100):
+def prepare(
+    model,
+    output,
+    checkpoint_root,
+    gpus,
+    updates=50,
+    attention="none",
+    eval_path="/workspace/w4a8/validation-50-old-study.jsonl",
+    eval_interval=5,
+):
     config = json.loads((model / "config.json").read_text())
     index = json.loads((model / "model.safetensors.index.json").read_text())
     if config["model_type"] != "qwen3" or config.get("quantization_config"):
@@ -18,9 +27,12 @@ def prepare(model, output, checkpoint_root, gpus, updates=100):
         raise ValueError("This experiment requires original tied-embedding Qwen3-4B")
     if len(gpus) != len(set(gpus)) or not 1 <= len(gpus) <= 8:
         raise ValueError("Use between one and eight distinct GPUs")
-    # Keep the matched 64-sample global batch for every allocation. All GPUs
-    # generate samples; training uses the largest DP degree dividing that batch.
-    train_gpus = max(n for n in range(1, len(gpus) + 1) if 64 % n == 0)
+    if attention not in ("none", "c16", "naive-c8", "naive-c4", "attn-qat-c4"):
+        raise ValueError("Unsupported attention route")
+    # Match the earlier 10x2 study: ten prompts with two answers per rollout.
+    # All GPUs generate samples; training uses the largest DP degree dividing
+    # the 20-sample global batch.
+    train_gpus = max(n for n in range(1, len(gpus) + 1) if 20 % n == 0)
     parameters = index["metadata"]["total_size"] // 2
     common = [
         "--num-layers",
@@ -112,11 +124,13 @@ def prepare(model, output, checkpoint_root, gpus, updates=100):
         "--num-rollout",
         str(updates),
         "--rollout-batch-size",
-        "8",
+        "10",
         "--n-samples-per-prompt",
-        "8",
+        "2",
         "--global-batch-size",
-        "64",
+        "20",
+        "--num-steps-per-rollout",
+        "1",
         "--micro-batch-size",
         "1",
         "--seq-length",
@@ -126,7 +140,7 @@ def prepare(model, output, checkpoint_root, gpus, updates=100):
         "--eval-max-response-len",
         "1024",
         "--rollout-temperature",
-        "1.0",
+        "0.8",
         "--rollout-top-p",
         "1.0",
         "--rollout-top-k",
@@ -145,11 +159,11 @@ def prepare(model, output, checkpoint_root, gpus, updates=100):
         "/experiment/datasets/gsm8k-seed42-val512/train.jsonl",
         "--eval-prompt-data",
         "gsm8k",
-        "/experiment/datasets/gsm8k-seed42-val512/validation.jsonl",
+        eval_path,
         "--n-samples-per-eval-prompt",
         "1",
         "--eval-interval",
-        "25",
+        str(eval_interval),
         "--eval-top-k",
         "1",
         "--eval-top-p",
@@ -183,6 +197,8 @@ def prepare(model, output, checkpoint_root, gpus, updates=100):
         "1",
         "--distrib-optim-sharding-type",
         "fully_reshardable",
+        "--custom-rollout-log-function-path",
+        "w4a8_sim.metrics.log_rollout",
         "--custom-eval-rollout-log-function-path",
         "w4a8_sim.checkpoint_policy.eval_log_hook",
         "--custom-megatron-before-train-step-hook-path",
@@ -204,11 +220,16 @@ def prepare(model, output, checkpoint_root, gpus, updates=100):
         str(model),
     ]
     result = dict(
-        model="Qwen/Qwen3-4B",
+        model=f"Qwen/{model.name}",
         model_path=str(model),
         physical_gpus=gpus,
         formal_launch_ready=False,
-        scope="Linear W4A8 simulation; FA core retains baseline precision",
+        scope=(
+            "Linear W4A8 simulation; C16 Transformer Engine attention control"
+            if attention in ("none", "c16")
+            else f"Linear W4A8 simulation; {attention} attention route"
+        ),
+        attention="c16" if attention == "none" else attention,
         topology=dict(train_tp=1, train_dp=train_gpus, train_ep=1, rollout_tp=1, rollout_engines=len(gpus)),
         estimates=dict(
             parameters=parameters,
@@ -236,9 +257,10 @@ def prepare(model, output, checkpoint_root, gpus, updates=100):
                 json.dumps({"architectures": ["W4A8SimQwen3ForCausalLM"]}),
             ]
         environment = {
-            "PYTHONPATH": "/quant/slime_plugins:/workspace/slime:/root/Megatron-LM",
+            "PYTHONPATH": "/quant/slime_plugins:/quant:/root/Megatron-LM",
             "SGLANG_EXTERNAL_MODEL_PACKAGE": "w4a8_sim.sglang_models",
             "W4A8_TRAINING_MODE": mode,
+            "W4A8_ATTENTION": "c16" if attention == "none" else attention,
             "W4A8_INITIAL_MODEL": str(model),
             "W4A8_BEST_WEIGHTS_ONLY": "1",
             "W4A8_STORAGE_FIRST_FIT": "1",
@@ -268,12 +290,27 @@ def prepare(model, output, checkpoint_root, gpus, updates=100):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", type=Path, required=True)
+    parser.add_argument("--model", type=Path, default=Path("/data4/yaozhuang/models/Qwen3-4B-Base"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--checkpoints", type=Path, required=True)
     parser.add_argument("--gpus", type=int, nargs="+", default=[0, 1, 2, 3])
+    parser.add_argument(
+        "--attention", choices=("none", "c16", "naive-c8", "naive-c4", "attn-qat-c4"), default="none"
+    )
+    parser.add_argument("--updates", type=int, default=50)
+    parser.add_argument("--eval-path", default="/workspace/w4a8/validation-50-old-study.jsonl")
+    parser.add_argument("--eval-interval", type=int, default=5)
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    result = prepare(args.model.resolve(), args.output.resolve(), args.checkpoints.resolve(), args.gpus)
+    result = prepare(
+        args.model.resolve(),
+        args.output.resolve(),
+        args.checkpoints.resolve(),
+        args.gpus,
+        updates=args.updates,
+        attention=args.attention,
+        eval_path=args.eval_path,
+        eval_interval=args.eval_interval,
+    )
     (args.output / "training-plan.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result["estimates"], indent=2))

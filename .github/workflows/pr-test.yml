@@ -1222,6 +1222,10 @@ jobs:
             },
             {
               "num_gpus": 0,
+              "test_file": "test_w4a8_attention.py"
+            },
+            {
+              "num_gpus": 0,
               "test_file": "test_model_provider_freeze.py"
             },
             {

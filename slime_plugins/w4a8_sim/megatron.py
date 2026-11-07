@@ -5,6 +5,7 @@ optimizer offload remain native Megatron. No global monkey-patching is used.
 """
 
 import copy
+import os
 from types import MethodType
 
 import torch
@@ -100,5 +101,15 @@ def model_provider(pre_process=True, post_process=True, vp_stage=None):
         raise ValueError("MoE W4A8 requires --moe-grouped-gemm")
     base_args = copy.copy(args)
     base_args.custom_model_provider_path = None
+    route = getattr(args, "w4a8_attention", None) or os.environ.get("W4A8_ATTENTION", "c16")
+    spec_functions = {
+        "c16": "get_c16_reference_spec",
+        "naive-c8": "get_naive_c8_spec",
+        "naive-c4": "get_naive_c4_spec",
+        "attn-qat-c4": "get_attn_qat_c4_spec",
+    }
+    if route not in spec_functions:
+        raise ValueError(f"Unsupported W4A8 attention route: {route}")
+    base_args.spec = ("w4a8_sim.attention", spec_functions[route])
     provider = _get_model_provider_func(base_args)
     return install(provider(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage))
