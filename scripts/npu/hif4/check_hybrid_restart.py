@@ -121,6 +121,7 @@ def main():
         torch.manual_seed(seed)
         tensor_parallel.model_parallel_cuda_manual_seed(seed)
         net, opt, sch, counts = build()
+        restart.verify_live_layout(out/"layout",rank,[net],opt)
         if options.phase == "save":
             batch = dict(x=[torch.randn(8,128,device="npu",dtype=torch.bfloat16) for _ in range(6)],
                          target=[torch.randn(8,64,device="npu") for _ in range(6)])

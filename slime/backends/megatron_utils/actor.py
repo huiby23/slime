@@ -111,6 +111,11 @@ class MegatronTrainRayActor(TrainRayActor):
         maybe_preallocate_npu_adam(self, args, role)
         self._resumed_batch = None
         self._resume_rng = None
+        if getattr(args, "hybrid_restart_store", None):
+            from pathlib import Path
+            from slime.utils.hybrid_restart import verify_live_layout
+            verify_live_layout(Path(args.optimizer_step_hf_save_dir).parent / "restart-layout",
+                               dist.get_rank(), self.model, self.optimizer)
         if getattr(args, "hybrid_resume_from", None):
             import json
             from pathlib import Path

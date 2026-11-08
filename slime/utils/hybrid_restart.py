@@ -178,6 +178,27 @@ def rank_layout(model, optimizer):
     return arrays, groups, layout
 
 
+def verify_live_layout(directory, rank, model, optimizer):
+    """Validate the real local shards before starting expensive on-policy generation."""
+    arrays, groups, layout = rank_layout(model, optimizer)
+    for name, tensor, master in arrays:
+        if tensor.numel() > CHUNK and not tensor.is_contiguous():
+            raise ValueError(f"Unsupported large noncontiguous recovery tensor: {name}")
+        if master is not None and not master.is_contiguous():
+            raise ValueError(f"Unsupported noncontiguous master for {name}")
+    report = dict(rank=rank, array_count=len(arrays), group_count=len(groups),
+                  raw_tensor_bytes=sum(t.numel()*t.element_size() for _,t,_ in arrays),
+                  cpu_masters=sum(name.endswith("/master") and t.device.type=="cpu" for name,t,_ in arrays),
+                  npu_masters=sum(name.endswith("/master") and t.device.type=="npu" for name,t,_ in arrays),
+                  layout_sha256=hashlib.sha256(json.dumps(layout, separators=(",",":")).encode()).hexdigest())
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"rank-{rank}.json"
+    staged = path.with_suffix(".partial")
+    staged.write_text(json.dumps(report,indent=2))
+    os.replace(staged, path)
+    return report
+
+
 def group_values(group):
     return map_tensors({k: v for k,v in group.items() if k != "params"}, saving=True)
 
