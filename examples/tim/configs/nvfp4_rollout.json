@@ -1,0 +1,1 @@
+{"extends": "base.json", "name": "bf16_train_nvfp4_rollout", "rollout": {"precision": "nvfp4_sim"}, "evaluation": {"precision": "nvfp4_sim"}}

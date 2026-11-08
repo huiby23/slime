@@ -1,0 +1,114 @@
+{
+  "date": "2026-11-08",
+  "scope": "Portable TIM entrypoint cleanup and CPU validation; fresh GPU integration not rerun",
+  "gpu_jobs_launched": 0,
+  "cuda_initialized": false,
+  "image": {
+    "tag": "slimerl/slime:v0.4.0-cu129",
+    "local_id": "sha256:efbc54259ccfc247e24d36be3425a4d34fe421e2230dfafd234adf87b04dc657"
+  },
+  "slime_commit": "0b0c277d5b4cc66efc3b6db269e2e5184e8f3b1e",
+  "source_bundle_sha256": "c4faabfc702d9e2676d2e7fe32044ada2786a8e397b141e11de542a5f6dfecbc",
+  "cpu_tests": {
+    "passed": 49,
+    "failed": 0,
+    "subtests_passed": 54,
+    "files": [
+      "tests/test_tim_bf16_runtime.py",
+      "tests/test_tim_fixed_noise.py",
+      "tests/test_tim_nvfp4_runtime.py",
+      "tests/test_tim_optimizer_observer.py",
+      "tests/test_tim_protocol.py"
+    ],
+    "coverage": [
+      "strict configuration and frozen input guards",
+      "native eval/save protocol and complete checkpoints",
+      "AdamW observer passivity at three learning rates",
+      "fixed FP32 noise and clean evaluation restoration",
+      "NVFP4 weight cache invalidation and per-worker audit"
+    ]
+  },
+  "cpu_preflight": [
+    {
+      "config": "bf16_lr1e6",
+      "passed": true,
+      "cuda_initialized": false
+    },
+    {
+      "config": "bf16_lr1e5",
+      "passed": true,
+      "cuda_initialized": false
+    },
+    {
+      "config": "bf16_lr1e3",
+      "passed": true,
+      "cuda_initialized": false
+    },
+    {
+      "config": "nvfp4_rollout",
+      "passed": true,
+      "cuda_initialized": false
+    },
+    {
+      "config": "nvfp4_rollout4_fresh",
+      "passed": true,
+      "cuda_initialized": false
+    },
+    {
+      "config": "nvfp4_train_rollout",
+      "passed": true,
+      "cuda_initialized": false
+    },
+    {
+      "config": "fixed_noise_s005",
+      "passed": true,
+      "cuda_initialized": false
+    }
+  ],
+  "existing_noise_bank": {
+    "compatible": true,
+    "canonical_tensors": 310,
+    "raw_tensors": 311,
+    "elements": 596049920
+  },
+  "gpu_validation": {
+    "performed": false,
+    "remaining": "New fresh-run smoke: rollout, recompute, optimizer update, weight sync, evaluation and checkpoint"
+  },
+  "publication_files_sha256": {
+    "README_TIM.md": "4d4cf39ca0520892f8a286f0b03d4584518fa0e06024e8d4cf15ae4500595057",
+    "examples/tim/HISTORICAL_PROTOCOL.md": "373cde071940db9107ef70fcef3d030cff9d8f73bc1e54994648208f06fbb916",
+    "examples/tim/README.md": "adf71fee8442e52fd9a2c8c68c6773a60d15c0ddac56124f4193d1d3d465ea83",
+    "examples/tim/__init__.py": "2e5351fe86b86ef5f280f2f621e3dbdd177ef355e494aebfa62e861a4b598164",
+    "examples/tim/configs/base.json": "3aeb6505b65b2e2918f74dad1745128472688236fcc0d9b9870a24e2510cac1a",
+    "examples/tim/configs/bf16_lr1e3.json": "1f8af49ca880aa086c812f5bf243a690a43e2dc7ff080d26db3cfc6179432520",
+    "examples/tim/configs/bf16_lr1e5.json": "9c9669d420729ef9812174b2a6818663d435e5d8787ba2c4fdde425faeb3ee9c",
+    "examples/tim/configs/bf16_lr1e6.json": "a5c352ebcc890daa1682828c715251843eeb8908fdc6ae4d5155e30aa829e7bb",
+    "examples/tim/configs/fixed_noise_s005.json": "862739af29dd99e4a602951170b2f3ee57c63f28bdb6adfa8c62f21f6131cac5",
+    "examples/tim/configs/nvfp4_rollout.json": "0600c546752e7e14328ea5ffa40cd05d2616369ce47f43cdb62f49042afab1f3",
+    "examples/tim/configs/nvfp4_rollout4_fresh.json": "57b7d36e0aca9a8fefa0bbf0effcaec94a09bc3d1104dc18b4cdb4ea798f034b",
+    "examples/tim/configs/nvfp4_train_rollout.json": "bbe265da8f6a2136aa6d49acf76a7964861ada2ad57f83d633f69e60b6e72eb0",
+    "examples/tim/container_driver.py": "1d226cb60c0a26e2d95290f8f0c38fac475b0f785d19df8312e88b451914d993",
+    "examples/tim/preflight.py": "317249ecc649d27cf5dd60657a5de69c11c286dee0899fe903db5d486cf812b4",
+    "examples/tim/prepare_noise_bank.py": "0c7ada434f3b68c35a92fe29e24a4e26a3f581a510710dafbe11e560feeb84fe",
+    "examples/tim/protocol.py": "e8c0dc9201088e77290fa72124d54405ea52d310e5d5bec3bfe39674dd6e6170",
+    "examples/tim/run.py": "ccbe5648c5276da68670fe8c696ba4533a392399447010ed634de265aa6d3ed9",
+    "slime_plugins/tim/__init__.py": "6255621ad2810bebd513ecb409a11b08e6526f7e5cb4197fc50a7897095e8601",
+    "slime_plugins/tim/bf16/__init__.py": "c9ade83289ed758a21bfda337237595de3f8bcfc06708d1c5bc4c61270e0609e",
+    "slime_plugins/tim/bf16/checkpoint_policy.py": "4df2a468ae959c1ba6b84d21b5cb9ba233e5a40611fb9a387add8870f2c31817",
+    "slime_plugins/tim/bf16/train.py": "ed824940f9f09f21ffde4a26535424a6c0bd656e6456d0ffe2cb7fc210f03928",
+    "slime_plugins/tim/bf16/training_validation.py": "904b7d2f3c51e85c7eff489352b421c0b85576f3c9538ebe282d68469fd1af17",
+    "slime_plugins/tim/fixed_noise/__init__.py": "39754b56766f9a3583716977038a303d6ff842eee54d23b8003f3cdfda038cec",
+    "slime_plugins/tim/fixed_noise/bank.py": "df4e641f0e64f1688c7adb89454a53d599c2b4cf75eb4c454424111dfc7324cd",
+    "slime_plugins/tim/fixed_noise/eval.py": "ad71b9662b4ee81926429b55127dab79a0c40f79381d35b8d22e871cf5c4f3e7",
+    "slime_plugins/tim/fixed_noise/sglang_models/__init__.py": "3a2a95d8e1b444e9acb32734b1f9bad19eb5f12a38d85e9ad4340cf560fb20b2",
+    "slime_plugins/tim/fixed_noise/sglang_models/qwen3.py": "17d36161a6fa20ef540ff7d3d1b6480f57b1c2295b91d2c4be3421a452d87eba",
+    "slime_plugins/tim/nvfp4_models/__init__.py": "7739ab39e51c43c99e7aba499c018e0a6930d13dc19a1f4b8c44aab625b73b39",
+    "slime_plugins/tim/nvfp4_models/qwen3.py": "349f62eb8831d0324a4ed9e9b7492e52fad7880a3c208f3173e51d0387c59fee",
+    "tests/test_tim_bf16_runtime.py": "50574bc97fd4ea917c87fcc079349477e2f46cc01ff99266ff4ef0d0d4247956",
+    "tests/test_tim_fixed_noise.py": "6a2ac89f889d6f19d8532b34c7b202faa5cd440782ebd1f51df243da88bbced6",
+    "tests/test_tim_nvfp4_runtime.py": "1aceee768b786e48cf0051edb0d30e46a96a490eaccb6725495c5d96b770e615",
+    "tests/test_tim_optimizer_observer.py": "ae760230ecd20ade4207a768f33b7fb699664a268a4a8a660ead17f796bf5b06",
+    "tests/test_tim_protocol.py": "e1f0d5eea724377009925872ae15a38a1dbb812de1b93a46cb7c55e8566fdb52"
+  }
+}

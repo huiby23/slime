@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "name": "base",
+  "trainer": "bf16",
+  "rollout": {"precision": "bf16", "temperature": 1.0, "top_p": 1.0, "top_k": -1, "mem_fraction": 0.18, "max_running_requests": 16},
+  "training": {"updates": 500, "prompts": 16, "answers": 8, "micro_batch_size": 1, "response_tokens": 1024, "context_tokens": 2048, "seed": 42},
+  "optimizer": {"lr": 1e-6, "weight_decay": 0.01, "beta1": 0.9, "beta2": 0.98},
+  "evaluation": {"interval": 25, "early_updates": 0, "retain_early": 0, "precision": "bf16"},
+  "topology": {"colocate": true, "sampler_replicas": 1},
+  "noise": {"sigma": 0.05, "seed": 20261030},
+  "data": {"train_questions": 2784, "eval_questions": 512, "screen_samples": 8, "min_correct": 2, "max_correct": 6},
+  "runtime": {"image": "slimerl/slime:v0.4.0-cu129", "slime_commit": "0b0c277d5b4cc66efc3b6db269e2e5184e8f3b1e", "cpus": 8, "memory_gib": 64}
+}

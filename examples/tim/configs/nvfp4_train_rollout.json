@@ -1,0 +1,1 @@
+{"extends": "nvfp4_rollout.json", "name": "nvfp4_train_rollout", "trainer": "nvfp4_sim"}

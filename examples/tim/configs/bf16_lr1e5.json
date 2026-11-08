@@ -1,0 +1,1 @@
+{"extends": "base.json", "name": "bf16_lr1e5", "optimizer": {"lr": 1e-5}, "evaluation": {"early_updates": 10, "retain_early": 10}}

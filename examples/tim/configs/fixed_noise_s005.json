@@ -1,0 +1,1 @@
+{"extends": "base.json", "name": "bf16_fixed_noise_s005", "rollout": {"precision": "fixed_noise"}}
