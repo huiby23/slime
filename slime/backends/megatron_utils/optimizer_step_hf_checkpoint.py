@@ -30,7 +30,7 @@ def _clear_export_memory():
 
 
 def after_optimizer_step(args, model, *, rollout_id, step_id, successful, grad_norm,
-                         disable_pre_hook=None, enable_pre_hook=None):
+                         disable_pre_hook=None, enable_pre_hook=None, optimizer=None, scheduler=None, data_iterator=None):
     """Count actual successful updates; all actor ranks enter the same save boundary.
 
     Called only after train_one_step has released its gradients and frame. No
@@ -51,11 +51,18 @@ def after_optimizer_step(args, model, *, rollout_id, step_id, successful, grad_n
     offset = int(args.optimizer_step_hf_completed_offset)
     completed = getattr(args, "_optimizer_step_hf_completed_updates", offset)
     finite_gradient = math.isfinite(float(grad_norm))
-    status = (int(rollout_id), int(step_id), completed, bool(successful), finite_gradient)
+    stateful = bool(getattr(args, "hybrid_restart_store", None))
+    status = (int(rollout_id), int(step_id), completed, bool(successful), finite_gradient,
+              (float(grad_norm) > 0) if stateful else True)
     statuses = [None] * dist.get_world_size()
     dist.all_gather_object(statuses, status, group=group)
     if any(item != status for item in statuses):
         raise RuntimeError(f"Actor ranks disagree at optimizer boundary: {statuses}")
+    if stateful:
+        if not successful or not finite_gradient or float(grad_norm) <= 0:
+            raise RuntimeError("Stateful GRPO requires a successful finite positive-gradient update")
+        if completed != int(rollout_id) * args.num_steps_per_rollout + int(step_id):
+            raise RuntimeError("Real update count and prepared minibatch cursor disagree")
     if not successful:
         return None
     if not finite_gradient:
@@ -90,6 +97,12 @@ def after_optimizer_step(args, model, *, rollout_id, step_id, successful, grad_n
         dist.barrier(group=group)
         _clear_export_memory()
 
+        bundle = None
+        if stateful:
+            from slime.utils.hybrid_restart import save_bundle
+            staging, bundle = save_bundle(args, model, optimizer, scheduler, data_iterator, rollout_id,
+                                 step_id, completed, dist, group)
+
         def publish():
             index_path = partial / "model.safetensors.index.json"
             index = json.loads(index_path.read_text())
@@ -112,11 +125,28 @@ def after_optimizer_step(args, model, *, rollout_id, step_id, successful, grad_n
                 "tensor_keys": len(index["weight_map"]), "shard_files": len(shards),
                 "model_tensor_bytes": index.get("metadata", {}).get("total_size"),
             }
+            if bundle is not None:
+                metadata.update(optimizer_state_saved=True, rng_state_saved=True, source_cursor_saved=True,
+                                hf_only=False, restart_bundle_at_save=str(bundle),
+                                restart_retention=args.hybrid_restart_retention)
             if getattr(args, "attention_simulation", None) is not None:
                 metadata["attention_simulation"] = args.attention_simulation
             (partial / "optimizer-step-checkpoint.json").write_text(
                 json.dumps(metadata, indent=2) + "\n")
+            if bundle is not None:
+                for item in partial.iterdir():
+                    if item.is_file():
+                        with item.open("rb") as saved:
+                            os.fsync(saved.fileno())
             os.replace(partial, final)
+            if bundle is not None:
+                from slime.utils.hybrid_restart import advance_latest, check_next_checkpoint_space, sync_dir
+                sync_dir(final)
+                sync_dir(root)
+                os.rename(staging, bundle)
+                sync_dir(bundle.parent)
+                advance_latest(bundle)
+                check_next_checkpoint_space(args, bundle, index["metadata"]["total_size"])
 
         _rank_zero_call(dist, group, publish)
         dist.barrier(group=group)

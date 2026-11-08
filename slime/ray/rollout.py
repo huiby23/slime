@@ -330,6 +330,9 @@ class RolloutManager:
             # Refresh the local snapshot before offload/pause can target a dead
             # actor. Replacement engines are created only before weight update.
             self.servers = ray.get(self.serving.finish_rollout.remote())
+        if getattr(self.args, "hybrid_restart_store", None):
+            from slime.utils.hybrid_restart import save_source
+            save_source(self.args, rollout_id, self.data_source)
         return result
 
     def _generate(self, rollout_id, start_time):
@@ -446,6 +449,17 @@ class RolloutManager:
             # progress and replay retained batches rather than rereading prompts.
             return
 
+        if getattr(self.args, "hybrid_resume_from", None):
+            from pathlib import Path
+            import torch
+            from slime.utils.hybrid_restart import restore_rng
+            state = torch.load(Path(self.args.hybrid_resume_from) / "source.pt", weights_only=False, map_location="cpu")
+            self.data_source.load_state_dict(state["source"])
+            restore_rng(state["rng"])
+            self.rollout_id = state["rollout"]
+            self.batch_builder.rollout_id = state["rollout"]
+            set_current_rollout_id(state["rollout"])
+            return
         source_restore = self.data_source.load(rollout_id)
         # Custom sources keep their existing load() contract; only the built-in
         # queue returns a source/builder restoration handoff.

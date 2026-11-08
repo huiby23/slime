@@ -361,6 +361,11 @@ def main(precision_recipe=None, recipe_argv=None):
     args.optimizer_step_hf_save_interval = options.hf_checkpoint_every_steps
     args.optimizer_step_hf_save_dir = str(output / "optimizer-step-checkpoints")
     args.optimizer_step_hf_completed_offset = parent_steps
+    stateful = bool(getattr(precision_recipe, "restart_retention", None))
+    if stateful:
+        from slime.utils.hybrid_restart import configure
+        configure(args, manifest, output, resume=precision_recipe.resume,
+                  retention=precision_recipe.restart_retention, link_history=not options.validate_arguments)
     if validation_directory is not None:
         if options.offline_checkpoint_validation:
             if args.eval_interval is not None or not args.skip_eval_before_train or args.custom_eval_rollout_log_function_path is not None:
@@ -376,9 +381,9 @@ def main(precision_recipe=None, recipe_argv=None):
         manifest["validation_protocol_helper_sha256"] = args.validation_protocol_helper_sha256
         args.validation_model_identity = {
             "run_id": run_id, "parent_hf_checkpoint": str(model.resolve()),
-            "parent_completed_optimizer_steps": parent_steps,
+            "parent_completed_optimizer_steps": manifest["parent_completed_optimizer_steps"],
             "parent_run_manifest": manifest["parent_run_manifest"],
-            "optimizer_state_restored": False,
+            "optimizer_state_restored": bool(getattr(args, "hybrid_resume_from", None)),
         }
         from slime_plugins.npu_validation_trajectory import validate_native_protocol
         _, _, validation_protocol, validation_protocol_sha = validate_native_protocol(args)
@@ -470,7 +475,8 @@ def main(precision_recipe=None, recipe_argv=None):
             checkpoint_index = json.loads((checkpoint / "model.safetensors.index.json").read_text())
             shards = set(checkpoint_index["weight_map"].values())
             if (metadata.get("completed_optimizer_steps") != global_step
-                    or metadata.get("complete") is not True or metadata.get("hf_only") is not True
+                    or metadata.get("complete") is not True or metadata.get("hf_only") != (not stateful)
+                    or (stateful and not metadata.get("optimizer_state_saved"))
                     or not shards or any(not (checkpoint / name).is_file() for name in shards)):
                 raise RuntimeError(f"Missing complete optimizer-step HF snapshot: {checkpoint}")
             checkpoint_paths.append(str(checkpoint))
@@ -509,10 +515,17 @@ def main(precision_recipe=None, recipe_argv=None):
                 temporary = published.with_name(published.name + ".partial")
                 shutil.copytree(final_weights, temporary)
                 os.replace(temporary, published)
+        if stateful:
+            root = Path(args.hybrid_restart_store)
+            latest = root / (root / "LATEST").read_text().strip()
+            proof = json.loads((latest / "restart.json").read_text())
+            if proof["completed"] != len(norms) or len(proof["ranks"]) != 8:
+                raise ValueError("Final full optimizer checkpoint does not match the trainer")
+            manifest["final_restart_bundle"] = str(latest)
         manifest.update(status="completed", optimizer_steps=parent_steps + len(norms),
-                        new_optimizer_steps=len(norms), gradient_norms=norms,
+                        new_optimizer_steps=len(norms) - (args.optimizer_step_hf_completed_offset if stateful else 0), gradient_norms=norms,
                         gradient_norm_order="rollout_id,step_id numeric",
-                        optimizer_resume_available=False,
+                        optimizer_resume_available=stateful,
                         completed_utc=datetime.now(timezone.utc).isoformat())
         (output / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
         print("QWEN30B_TRAINED_HF_MODEL=" + str(published), flush=True)
@@ -521,6 +534,13 @@ def main(precision_recipe=None, recipe_argv=None):
         # A complete HF file does not imply Adam/RNG/source state was saved.
         try:
             count = len(list(output.glob("grad_norm_actor_*.pt")))
+            if stateful:
+                durable = Path(args.hybrid_restart_store) / "LATEST"
+                if durable.is_file():
+                    latest = durable.parent / durable.read_text().strip()
+                    proof = json.loads((latest / "restart.json").read_text())
+                    manifest.update(optimizer_resume_available=True, latest_restart_bundle=str(latest),
+                                    latest_durable_optimizer_steps=proof["completed"])
             completed_hf = []
             for index in sorted((output / "weight-updates").glob("weight_v*/model.safetensors.index.json")):
                 mapping = json.loads(index.read_text())["weight_map"]
@@ -533,6 +553,9 @@ def main(precision_recipe=None, recipe_argv=None):
                             complete_optimizer_step_hf_checkpoints=[str(path.parent) for path in sorted(
                                 (output / "optimizer-step-checkpoints").glob("checkpoint_step_*/optimizer-step-checkpoint.json"))
                                 if json.loads(path.read_text()).get("complete") is True])
+            if stateful and (output / "waiting-for-checkpoint-storage.json").is_file():
+                manifest["status"] = "waiting_for_storage"
+                manifest["storage_report"] = str(output / "waiting-for-checkpoint-storage.json")
             temporary = output / "manifest.json.partial"
             temporary.write_text(json.dumps(manifest, indent=2) + "\n")
             os.replace(temporary, output / "manifest.json")

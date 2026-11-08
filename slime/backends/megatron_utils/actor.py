@@ -109,6 +109,22 @@ class MegatronTrainRayActor(TrainRayActor):
         from slime.utils.npu_optimizer_preallocation import maybe_preallocate_npu_adam
 
         maybe_preallocate_npu_adam(self, args, role)
+        self._resumed_batch = None
+        self._resume_rng = None
+        if getattr(args, "hybrid_resume_from", None):
+            import json
+            from pathlib import Path
+            from slime.utils.hybrid_restart import load_rank
+
+            root = Path(args.hybrid_resume_from)
+            record = json.loads((root / "restart.json").read_text())
+            rng, offsets, packed = load_rank(root, record["ranks"][dist.get_rank()], self.model,
+                                             self.optimizer, self.opt_param_scheduler)
+            if args.hybrid_resume_in_round:
+                self._resumed_batch = packed
+                args._hybrid_resume_position = (record["rollout"], record["step"] + 1, offsets, rng)
+            else:
+                self._resume_rng = rng
 
         vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size() or 1
         if vpp_size > 1:
@@ -411,8 +427,19 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.offload_train:
             self.wake_up()
 
-        with timer("data_preprocess"):
-            rollout_data = self._get_rollout_data(rollout_data_ref)
+        if self._resumed_batch is not None:
+            from slime.utils.hybrid_restart import map_tensors
+            if rollout_data_ref is not None or self.role != "actor":
+                raise ValueError("A partially consumed checkpoint requires its stored on-policy batch")
+            rollout_data = map_tensors(self._resumed_batch, saving=False)
+            self._resumed_batch = None
+        else:
+            if self._resume_rng is not None:
+                from slime.utils.hybrid_restart import restore_rng
+                restore_rng(self._resume_rng)
+                self._resume_rng = None
+            with timer("data_preprocess"):
+                rollout_data = self._get_rollout_data(rollout_data_ref)
 
         if self.role == "critic":
             result = self.train_critic(rollout_id, rollout_data)
@@ -464,7 +491,8 @@ class MegatronTrainRayActor(TrainRayActor):
             self.fill_routing_replay(data_iterator, num_microbatches, rollout_data)
 
         with inverse_timer("train_wait"), timer("train"):
-            if self.args.compute_advantages_and_returns:
+            prepared = getattr(self.args, "_hybrid_resume_position", None) is not None
+            if self.args.compute_advantages_and_returns and not prepared:
                 if "ref" in self.weights_backuper.backup_tags:
                     if self.args.use_routing_replay:
                         os.environ["ROUTING_REPLAY_STAGE"] = "fallthrough"
@@ -536,7 +564,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 # because we may need normalize the whole rollout.
                 compute_advantages_and_returns(self.args, rollout_data)
 
-            if self.rollout_data_postprocess is not None:
+            if self.rollout_data_postprocess is not None and not prepared:
                 self.rollout_data_postprocess(self.args, rollout_id, rollout_data)
 
             train_metric_utils.log_rollout_data(

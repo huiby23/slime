@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "save_pid": 3265567,
+  "restore_pid": 3268216,
+  "shard_sha": "8f1e557b268514b70bd838016a21a12e41da361f7882759e76834558db266857",
+  "cpu_npu": {
+    "cpu_parameters": 2,
+    "npu_parameters": 2
+  },
+  "matched_states": 111,
+  "next_update": [
+    1.0051183700561523,
+    0.6790928267102756
+  ],
+  "next_cursor": 6
+}

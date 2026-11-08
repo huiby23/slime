@@ -18,3 +18,14 @@ bash scripts/npu/hif4/run.sh --run
 ```
 
 The rollout backend batches key tiles for single-query decode and preserves the 128-key online update order. The 910B3 comparison covers prefixes from 1 through 8,192. In the 4,097-key case with three requests this changed the median single-layer time from 77.6 ms to 12.7 ms. These timings describe attention only. End-to-end training time includes prompt filtering, generation, full-model gradients and checkpoint I/O.
+
+Every layer reads its full visible logical prefix from the native BF16 KV pool and computes HiF4 operands anew. The serving bridge shares integer address metadata within one forward. Quantized K/V values and scales have no lifetime across forwards. P is quantized once before PV, and the softmax denominator uses the original probabilities. This simulates HiF4 numerical precision on the 910B3.
+
+Every fifth successful update writes an immutable HF checkpoint plus a sharded, lossless restart bundle. The bundle contains the actual model tensors, FP32 master parameters, both Adam moments and step counters, scheduler, per-rank RNG, prepared on-policy minibatches, iterator offsets and rollout source state. Run with the same topology, code, data and base model to resume. The default `--restart-retention latest` advances `RUN/hybrid-restart/LATEST` after all ranks and HF weights are durable. Historical HF weights remain available for evaluation. `--restart-retention all` retains all recovery bundles and requires storage sized for the entire run. A fresh generation after a restart can differ due to asynchronous request scheduling.
+
+```sh
+store="$RUN/hybrid-restart"
+bash scripts/npu/hif4/run.sh --run --resume-from "$store/$(cat "$store/LATEST")"
+```
+
+While historical retention is being decided, launching with `--restart-retention all` keeps each state written so far. The job records a storage limit and exits at a durable checkpoint if free space falls below the next HF plus Adam uncompressed bound. To switch a running lineage after a retention decision, atomically install `retention.json` under its recovery store with the manifest's exact `hybrid_restart_fingerprint` in `fingerprint` and `retention` set to `latest` or `all`. The next fully committed checkpoint applies the choice. Switching to `latest` prunes only older linked recovery bundles after the new pointer is durable.

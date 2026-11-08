@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import shutil
 from argparse import Namespace
 from collections.abc import Callable, Mapping, Sequence
@@ -67,22 +69,38 @@ class UpdateWeightFromDisk:
         self.weight_version += 1
         version_dir = Path(self.args.update_weight_disk_dir) / f"weight_v{self.weight_version:06d}"
 
-        if dist.get_rank() == 0:
-            shutil.rmtree(version_dir, ignore_errors=True)
-        dist.barrier(group=get_gloo_group())
-
-        # every writing rank creates the dir itself: a non-POSIX shared filesystem may not surface
-        # one rank's mkdir to another until commit
-        version_dir.mkdir(parents=True, exist_ok=True)
-        save_hf_model_to_path(
-            self.args,
-            version_dir,
-            self.model,
-            model_name=self.model_name,
-            quantization_config=self.quantization_config,
-            progress_desc="Save HF  weights for update from disk",
-        )
-        dist.barrier(group=get_gloo_group())
+        group = get_gloo_group()
+        completed = getattr(self.args, "_optimizer_step_hf_completed_updates",
+                            getattr(self.args, "optimizer_step_hf_completed_offset", 0))
+        reuse = (getattr(self.args, "hybrid_restart_store", None) and completed > 0
+                 and completed == (self.weight_version - 1) * self.args.num_steps_per_rollout)
+        if reuse:
+            from ..optimizer_step_hf_checkpoint import _rank_zero_call
+            def link_completed_model():
+                checkpoint = Path(self.args.optimizer_step_hf_save_dir) / f"checkpoint_step_{completed:06d}"
+                proof = json.loads((checkpoint / "optimizer-step-checkpoint.json").read_text())
+                if not proof["complete"] or proof["completed_optimizer_steps"] != completed or not proof["optimizer_state_saved"]:
+                    raise ValueError("HF model does not match current completed optimizer update")
+                stage = version_dir.with_suffix(".partial")
+                shutil.copytree(checkpoint, stage, copy_function=os.link,
+                                ignore=shutil.ignore_patterns("optimizer-step-checkpoint.json"))
+                os.rename(stage, version_dir)
+            version_dir.parent.mkdir(parents=True, exist_ok=True)
+            _rank_zero_call(dist, group, link_completed_model)
+        else:
+            if dist.get_rank() == 0:
+                shutil.rmtree(version_dir, ignore_errors=True)
+            dist.barrier(group=group)
+            version_dir.mkdir(parents=True, exist_ok=True)
+            save_hf_model_to_path(
+                self.args,
+                version_dir,
+                self.model,
+                model_name=self.model_name,
+                quantization_config=self.quantization_config,
+                progress_desc="Save HF weights for update from disk",
+            )
+        dist.barrier(group=group)
 
         # every rank runs the hook (it gates itself): each container must publish
         # its own writes

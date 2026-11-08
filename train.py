@@ -32,7 +32,9 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
         ray.get(rollout_manager.onload_weights.remote())
 
     # Always push actor weights to rollout once weights are loaded.
-    actor_model.update_weights()
+    resume_prepared = getattr(args, "hybrid_resume_in_round", False)
+    if not resume_prepared:
+        actor_model.update_weights()
     # Reattached async producers stay paused until restored weights are installed.
     # This startup notification resumes them once, before entering the train loop.
     ray.get(rollout_manager.training_ready.remote())
@@ -40,7 +42,7 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
     if args.check_weight_update_equal:
         ray.get(rollout_manager.check_weights.remote(action="compare"))
 
-    if args.offload_rollout:
+    if args.offload_rollout and not resume_prepared:
         ray.get(rollout_manager.onload_kv.remote())
 
     # special case for eval-only
@@ -61,7 +63,11 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
         if args.eval_interval is not None and rollout_id == 0 and not args.skip_eval_before_train:
             evaluate(rollout_id)
 
-        rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
+        if resume_prepared:
+            rollout_data_ref = None
+            resume_prepared = False
+        else:
+            rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
 
         if args.offload_rollout:
             ray.get(rollout_manager.offload.remote())

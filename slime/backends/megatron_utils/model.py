@@ -863,8 +863,21 @@ def train(
         bool(getattr(args, "optimizer_step_hf_save_interval", 0))
         and getattr(model[0], "role", "actor") == "actor"
     )
+    first_step = 0
+    pending = getattr(args, "_hybrid_resume_position", None)
+    if pending is not None:
+        from slime.utils.hybrid_restart import restore_rng
+        r, first_step, offsets, rng = pending
+        if r != rollout_id or len(offsets) != len(data_iterator):
+            raise ValueError("Prepared rollout and trainer cursor disagree")
+        for iterator, offset in zip(data_iterator, offsets, strict=True):
+            if offset != sum(num_microbatches[:first_step]):
+                raise ValueError("Prepared microbatch cursor does not match completed updates")
+            iterator.offset = offset
+        restore_rng(rng)
+        del args._hybrid_resume_position
     # Run training iterations till done.
-    for step_id in range(num_steps_per_rollout):
+    for step_id in range(first_step, num_steps_per_rollout):
 
         # Run training step.
         step_result = train_one_step(
@@ -882,7 +895,7 @@ def train(
         )
         loss_dict, grad_norm = step_result[:2]
 
-        if step_id == 0:
+        if step_id == first_step:
             # Enable forward pre-hook after training step has successfully run. All subsequent
             # forward passes will use the forward pre-hook / `param_sync_func` in
             # `forward_backward_func`.
@@ -991,6 +1004,7 @@ def train(
             after_optimizer_step(
                 args, model, rollout_id=rollout_id, step_id=step_id,
                 successful=step_result[2], grad_norm=grad_norm,
+                optimizer=optimizer, scheduler=opt_param_scheduler, data_iterator=data_iterator,
                 disable_pre_hook=(lambda: disable_forward_pre_hook(model)) if pre_hook_enabled else None,
                 enable_pre_hook=(lambda: enable_forward_pre_hook(model)) if pre_hook_enabled else None,
             )

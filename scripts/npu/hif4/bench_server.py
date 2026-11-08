@@ -24,7 +24,8 @@ def load_file(name, path):
 
 def read_hbm():
     raw = subprocess.check_output(["npu-smi", "info"], text=True, timeout=15)
-    values = [int(v) for v in re.findall(r"([0-9]+) / 65536\s*\|", raw)]
+    rows = [line for line in raw.splitlines() if re.search(r"\b[\da-fA-F]{4}:[\da-fA-F]{2}:[\da-fA-F]{2}\.\d+", line)]
+    values = [int(v) for row in rows for v in re.findall(r"(\d+)\s*/\s*65536\s*\|", row)]
     if len(values) != 8:
         raise RuntimeError("Cannot identify all eight 910B HBM readings")
     return raw, values
@@ -61,20 +62,24 @@ def measure(args):
                   disable_overlap_schedule=True, skip_server_warmup=True, stream_interval=1, watchdog_timeout=600)
     report = dict(server=server, implementation=recipe.implementation_sha, policy=recipe.policy_sha,
                   samples=[], optimizer_updates=0, fixture="length-controlled repeated DAPO prompt token IDs")
-    save = lambda: (out / "result.json").write_text(json.dumps(report, indent=2, allow_nan=False))
+    def save():
+        partial = out / "result.partial"
+        partial.write_text(json.dumps(report, indent=2, allow_nan=False))
+        partial.replace(out / "result.json")
     raw, initial = read_hbm()
     if raw.count("No running processes found in NPU") != 8:
         raise RuntimeError("At least one NPU already has a process")
     peak = initial.copy()
     end = threading.Event()
+    report["hbm_valid_samples"] = 0
     def monitor():
         while not end.wait(2):
             try:
                 _, usage = read_hbm()
-                peak[:] = map(max, peak, usage)
+                peak[:] = list(map(max, peak, usage))
+                report["hbm_valid_samples"] += 1
             except (OSError, subprocess.SubprocessError, RuntimeError) as exc:
-                report["hbm_error"] = str(exc)
-                return
+                report["hbm_read_errors"] = report.get("hbm_read_errors", 0) + 1
     watcher = threading.Thread(target=monitor, daemon=True)
     command = [str(recipe.shim), "-m", "slime.backends.sglang_utils.runtime"]
     with (out / "server.log").open("w") as log:
@@ -108,7 +113,7 @@ def measure(args):
                 ids = ([1000 + index] + (ids * (1 + length // len(ids))))[:length]
                 requests.append(dict(input_ids=ids, stream=True, return_logprob=True, logprob_start_len=0,
                                      sampling_params=dict(temperature=0., max_new_tokens=args.tokens, ignore_eos=True)))
-            for repeat in range(3):
+            for repeat in range(args.repeats):
                 tag = f"len{length}-repeat{repeat}"
                 barrier = threading.Barrier(args.batch + 1)
                 def one(pair):
@@ -161,4 +166,5 @@ if __name__ == "__main__":
     p.add_argument("--lengths", type=int, nargs="+", default=[1024,3968])
     p.add_argument("--batch", type=int, default=3)
     p.add_argument("--tokens", type=int, default=12)
+    p.add_argument("--repeats", type=int, default=3)
     measure(p.parse_args())

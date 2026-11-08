@@ -35,7 +35,9 @@ class AttentionRecipe:
     repository = REPOSITORY
     validation_helper = HERE / "aime_protocol.py"
 
-    def __init__(self, workspace):
+    def __init__(self, workspace, *, resume=None, retention="latest"):
+        self.resume = resume
+        self.restart_retention = retention if IS_HIF4 else None
         self.workspace = workspace
         self.shim = ADAPTERS / "python-c8v16"
         self.policy = json.loads(POLICY_FILE.read_text())
@@ -76,6 +78,9 @@ class AttentionRecipe:
     def manifest(self):
         return {
             "precision": f"{PRECISION}: BF16 backbone, {CUBE_FORMAT.upper()} Cube operands, BF16 Vector boundaries with FP32 reductions, FP32 Adam",
+            **({"optimizer_checkpoint_requested": True, "hybrid_restart_retention": self.restart_retention,
+                "optimizer_step_hf_checkpoint_format": "HF weights plus lossless sharded hybrid Adam recovery"}
+               if IS_HIF4 else {}),
             "attention_simulation": {
                 "backend": BACKEND, "trainer_spec": SPEC, "policy": self.policy,
                 "policy_sha256": self.policy_sha, "implementation_sha256": self.implementation_sha,
@@ -83,6 +88,10 @@ class AttentionRecipe:
                          if IS_HIF4 else "QK/PV input QDQ: MXFP8 E4M3FN / E8M0, block32 along contraction"),
                 "vector": "BF16 boundaries; FP32 max/sum and matrix multiplication accumulation",
                 "backbone": "BF16", "kv_cache": "BF16", "backward": "high-precision STE",
+                **({"incremental_quantized_kv": False,
+                    "kv_conversion": "recompute HiF4 from each layer's full visible BF16 logical prefix on every forward",
+                    "p_conversion": "one HiF4 QDQ of unnormalized softmax weights before PV",
+                    "hardware_low_bit_storage_or_matmul": False} if IS_HIF4 else {}),
             },
         }
 
@@ -127,7 +136,11 @@ def main(argv=None):
     mode.add_argument("--print-command", action="store_true", help="Render actual Slime argv/manifest without Ray (default)")
     mode.add_argument("--validate-arguments", action="store_true", help="Parse installed Slime/Megatron/SGLang config without training")
     mode.add_argument("--run", action="store_true", help="Start the 100-update job on the configured NPU host")
+    parser.add_argument("--resume-from", type=Path, help="Complete same-lineage hybrid Adam recovery directory")
+    parser.add_argument("--restart-retention", choices=["all", "latest"], default="latest")
     options = parser.parse_args(argv)
+    if not IS_HIF4 and (options.resume_from or options.restart_retention != "latest"):
+        parser.error("Hybrid recovery is supported by the HiF4 recipe")
     workspace = options.workspace.resolve()
     if any(key.startswith("SLIME_NPU_REPLAY0_") and value for key, value in os.environ.items()):
         raise ValueError("Fresh C8V16 requires newly generated on-policy answers")
@@ -148,7 +161,7 @@ def main(argv=None):
     if not options.run:
         flags.append("--validate-arguments" if options.validate_arguments else "--print-command")
     flags.extend(["--", "--rollout-shuffle", "--log-probs-chunk-size", "1024"])
-    train_dapo(AttentionRecipe(workspace), flags)
+    train_dapo(AttentionRecipe(workspace, resume=options.resume_from, retention=options.restart_retention), flags)
 
 
 if __name__ == "__main__":
