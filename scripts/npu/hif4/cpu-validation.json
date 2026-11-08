@@ -1,0 +1,16 @@
+{
+  "device": "cpu",
+  "decoded_sha256": "ca250f7e082c670d9ec78a572ea7b56d776c5a4ba7306211352ac60c7f8b7674",
+  "count": 38080,
+  "groups64": 595,
+  "exact_against_public_reference": true,
+  "reference_sha256": "37b376bae331ddd90c72749653185eac00378b69cfc0e09c7c82dcbd80782928",
+  "signed_and_all_zero_format_checks": true,
+  "max_abs_prefix_difference": 0.0,
+  "forward_dq_dk_dv_relative_l2": null,
+  "probability_example": [
+    0.9375,
+    0.3125
+  ],
+  "p_candidate": "single_hif4_qdq_before_pv"
+}

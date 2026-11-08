@@ -108,8 +108,8 @@ def _validate(q, k, v, config, offset):
         raise ValueError('Invalid absolute query_offset')
 
 
-def _pv(prob, full_v, raw_v, query_start, key_start):
-    """FP32 product of MXFP8 operands, with a prefix-safe diagonal V group."""
+def _pv(prob, full_v, raw_v, query_start, key_start, group_size, qdq):
+    """Multiply the quantized operands, recomputing the last visible V group per row."""
     rows, width = prob.shape[-2:]
     key_end = key_start + width
     if query_start >= key_end:
@@ -120,8 +120,8 @@ def _pv(prob, full_v, raw_v, query_start, key_start):
     # below this tile share the entire tile; rows above it have zero probability.
     qidx = torch.arange(query_start - key_start, query_start - key_start + rows, device=prob.device)
     kidx = torch.arange(width, device=prob.device)
-    group = qidx // MX_WIDTH
-    shared = (kidx[None, :] // MX_WIDTH < group[:, None]) | (qidx[:, None] >= width)
+    group = qidx // group_size
+    shared = (kidx[None, :] // group_size < group[:, None]) | (qidx[:, None] >= width)
     result = prob.masked_fill(~shared, 0) @ full_v
 
     first = max(0, key_start - query_start)
@@ -129,15 +129,15 @@ def _pv(prob, full_v, raw_v, query_start, key_start):
     if last <= first:
         return result
     local = qidx[first:last]
-    diagonal_groups = local // MX_WIDTH
-    pad = (-width) % MX_WIDTH
+    diagonal_groups = local // group_size
+    pad = (-width) % group_size
     b, h, _, d = raw_v.shape
-    v_blocks = F.pad(raw_v, (0, 0, 0, pad)).reshape(b, h, -1, MX_WIDTH, d)
+    v_blocks = F.pad(raw_v, (0, 0, 0, pad)).reshape(b, h, -1, group_size, d)
     v_tail = v_blocks.index_select(2, diagonal_groups)
-    visible = torch.arange(MX_WIDTH, device=prob.device) <= (local % MX_WIDTH)[:, None]
+    visible = torch.arange(group_size, device=prob.device) <= (local % group_size)[:, None]
     # [B,H,Q,D,32] makes each scale local to one query and one V feature.
-    v_tail = mx(v_tail.transpose(-1, -2).masked_fill(~visible[:, None, :], 0.0))
-    p_index = diagonal_groups[:, None] * MX_WIDTH + torch.arange(MX_WIDTH, device=prob.device)
+    v_tail = qdq(v_tail.transpose(-1, -2).masked_fill(~visible[:, None, :], 0.0))
+    p_index = diagonal_groups[:, None] * group_size + torch.arange(group_size, device=prob.device)
     p_index = p_index[None, None].expand(b, h, -1, -1)
     p_tail = F.pad(prob[:, :, first:last], (0, pad)).gather(-1, p_index)
     tail = (p_tail.unsqueeze(-2) @ v_tail.transpose(-1, -2)).squeeze(-2)
@@ -151,37 +151,38 @@ def attention(q, k, v, config=AttentionConfig(), *, query_offset=0):
         return _attention(q, k, v, config, query_offset)
 
 
-def _attention(q, k, v, config, offset):
+def _attention(q, k, v, config, offset, *, qdq=mx, group_size=MX_WIDTH):
     end = offset + q.size(2)
-    q8 = mx(bf(q.float()))
-    k8 = mx(bf(k[:, :, :end].float()))
+    q_quant = qdq(bf(q.float()))
+    k_quant = qdq(bf(k[:, :, :end].float()))
     v16 = bf(v[:, :, :end].float())
     # All complete groups can be used directly by every later query.
-    v8 = mx(v16.transpose(-1, -2)).transpose(-1, -2)
+    v_quant = qdq(v16.transpose(-1, -2)).transpose(-1, -2)
     repeat = q.size(1) // k.size(1)
     if repeat > 1:
-        k8, v8, v16 = (x.repeat_interleave(repeat, dim=1) for x in (k8, v8, v16))
+        k_quant, v_quant, v16 = (x.repeat_interleave(repeat, dim=1) for x in (k_quant, v_quant, v16))
 
     chunks = []
     for qs in range(0, q.size(2), config.query_block):
         qe = min(q.size(2), qs + config.query_block)
-        query = q8[:, :, qs:qe]
+        query = q_quant[:, :, qs:qe]
         qpos = torch.arange(offset + qs, offset + qe, device=q.device)
         maximum = query.new_full((*query.shape[:-1], 1), -math.inf)
         denominator = torch.zeros_like(maximum)
         numerator = torch.zeros_like(query)
         for ks in range(0, offset + qe, config.key_block):
             ke = min(ks + config.key_block, offset + qe)
-            scores = bf((query @ k8[:, :, ks:ke].transpose(-1, -2)) * (q.size(-1) ** -0.5))
+            scores = bf((query @ k_quant[:, :, ks:ke].transpose(-1, -2)) * (q.size(-1) ** -0.5))
             masked = torch.arange(ks, ke, device=q.device)[None, :] > qpos[:, None]
             scores = scores.masked_fill(masked, -math.inf)
             new_max = bf(torch.maximum(maximum, scores.amax(dim=-1, keepdim=True)))
             alpha = bf(bf(maximum - new_max).exp())
             prob = bf(bf(scores - new_max).exp())
-            # BF16 probability enters the FP32 sum. MXFP8 P is used only at PV.
+            # The denominator uses BF16 probabilities. The Cube receives the QDQ values.
             tile_sum = bf(prob.sum(dim=-1, keepdim=True))
             denominator = bf(bf(denominator * alpha) + tile_sum)
-            contribution = _pv(mx(prob), v8[:, :, ks:ke], v16[:, :, ks:ke], offset + qs, ks)
+            contribution = _pv(qdq(prob), v_quant[:, :, ks:ke], v16[:, :, ks:ke],
+                               offset + qs, ks, group_size, qdq)
             numerator = bf(bf(numerator * alpha) + bf(contribution))
             maximum = new_max
         chunks.append((numerator / denominator).bfloat16())
