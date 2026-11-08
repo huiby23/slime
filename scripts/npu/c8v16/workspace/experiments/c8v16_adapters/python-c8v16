@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+adapter_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+export PYTHONPATH="${adapter_dir}${PYTHONPATH:+:${PYTHONPATH}}"
+python_path=${HBY_C8V16_REAL_PYTHON:-/root/hby/envs/slime/bin/python}
+if [[ $# -eq 2 && "$1" == '-m' && "$2" == 'slime.backends.sglang_utils.runtime' ]]; then
+    exec "$python_path" -m c8v16_runtime
+fi
+exec "$python_path" "$@"

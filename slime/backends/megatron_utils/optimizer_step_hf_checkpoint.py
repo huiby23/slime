@@ -112,6 +112,8 @@ def after_optimizer_step(args, model, *, rollout_id, step_id, successful, grad_n
                 "tensor_keys": len(index["weight_map"]), "shard_files": len(shards),
                 "model_tensor_bytes": index.get("metadata", {}).get("total_size"),
             }
+            if getattr(args, "attention_simulation", None) is not None:
+                metadata["attention_simulation"] = args.attention_simulation
             (partial / "optimizer-step-checkpoint.json").write_text(
                 json.dumps(metadata, indent=2) + "\n")
             os.replace(partial, final)

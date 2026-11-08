@@ -1,0 +1,51 @@
+{
+  "device": "npu",
+  "policy": {
+    "query_block": 128,
+    "key_block": 128,
+    "vector": "bf16",
+    "quantize_operands": true,
+    "causal": true,
+    "reduction": "mixed_fp32_reduction"
+  },
+  "shape_q": [
+    1,
+    4,
+    133,
+    128
+  ],
+  "shape_kv": [
+    1,
+    1,
+    133,
+    128
+  ],
+  "output_dtype": "bfloat16",
+  "one_token_pv_oracle_exact": true,
+  "errors_vs_cpu": {
+    "output": {
+      "relative_l2": 0.0,
+      "max_abs": 0.0
+    },
+    "dQ": {
+      "relative_l2": 2.287798452016432e-05,
+      "max_abs": 0.001953125
+    },
+    "dK": {
+      "relative_l2": 9.720432672111201e-07,
+      "max_abs": 0.0001220703125
+    },
+    "dV": {
+      "relative_l2": 1.3513431262879294e-08,
+      "max_abs": 9.5367431640625e-07
+    }
+  },
+  "prefix_vs_full_max_abs": {
+    "31": 0.0,
+    "33": 0.0,
+    "129": 0.0
+  },
+  "gradients_finite_and_nonzero": true,
+  "wall_seconds": 49.42337418999523,
+  "optimized_model_updates": 0
+}

@@ -15,7 +15,7 @@ import uuid
 from zoneinfo import ZoneInfo
 
 
-def main():
+def main(precision_recipe=None, recipe_argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", default="/root/hby")
     parser.add_argument("--model", default=None)
@@ -51,7 +51,7 @@ def main():
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--validate-arguments", action="store_true")
     parser.add_argument("--print-command", action="store_true")
-    options, extra = parser.parse_known_args()
+    options, extra = parser.parse_known_args(recipe_argv)
     if options.hf_checkpoint_every_steps < 0:
         parser.error("--hf-checkpoint-every-steps cannot be negative")
     sglang_logprobs_environment = {
@@ -67,7 +67,7 @@ def main():
     if "--full-checkpoint" in extra:
         parser.error("This first-version launcher exports complete HF weights and does not claim optimizer resume")
     workspace = Path(options.workspace).resolve()
-    repo = workspace / "slime"
+    repo = precision_recipe.repository if precision_recipe else workspace / "slime"
     model = Path(options.model) if options.model else workspace / "models/Qwen3-30B-A3B"
     data = Path(options.data).resolve() if options.data else workspace / "data/dapo-math-17k/train.jsonl"
     evaluation = Path(options.eval_data).resolve() if options.eval_data else workspace / "data/aime-2024/eval.jsonl"
@@ -132,6 +132,8 @@ def main():
     run_id = options.version + "_" + stamp + "_" + uuid.uuid4().hex[:6]
     output = workspace / "runs/qwen3-30b-a3b-dapo-math-17k" / run_id
     output.mkdir(parents=True)
+    precision_environment = precision_recipe.environment(output) if precision_recipe else {}
+    os.environ.update(precision_environment)
     published = workspace / "models/finetunes" / ("Qwen3-30B-A3B-DAPO-Math-17k-" + run_id)
     published.parent.mkdir(parents=True, exist_ok=True)
     ray_tmp = workspace / ".r" / uuid.uuid4().hex[:8]
@@ -189,7 +191,7 @@ def main():
                        "HCCL_BUFFSIZE": os.environ.get("HCCL_BUFFSIZE", "128"),
                        "SLIME_NPU_TRIM_UNUSED_CPU_HEAP": os.environ.get("SLIME_NPU_TRIM_UNUSED_CPU_HEAP", "1"),
                        "SLIME_NPU_PREALLOCATE_ADAM_HELPER": str(workspace / "setup/preallocate-hybrid-adam.py"),
-                       "SLIME_NPU_PREALLOCATE_REPORT_DIR": str(output / "optimizer-preallocation")} | version_environment),
+                       "SLIME_NPU_PREALLOCATE_REPORT_DIR": str(output / "optimizer-preallocation")} | version_environment | precision_environment),
         "--prompt-data", str(data), "--input-key", "messages", "--label-key", "label",
         "--apply-chat-template", "--apply-chat-template-kwargs", '{"enable_thinking": false}',
         "--rm-type", "math", "--advantage-estimator", "grpo",
@@ -208,7 +210,7 @@ def main():
         "--attention-softmax-in-fp32", "--attention-backend", "flash",
         "--seq-length", str(options.sequence_length), "--max-position-embeddings", "40960",
         "--sglang-config", str(config), "--router-prometheus-host", "127.0.0.1",
-        "--sglang-device", "npu", "--sglang-attention-backend", "ascend",
+        "--sglang-device", "npu", "--sglang-attention-backend", precision_recipe.backend if precision_recipe else "ascend",
         "--sglang-sampling-backend", "pytorch", "--sglang-disable-cuda-graph",
         "--sglang-context-length", str(options.sglang_context_length),
         "--sglang-max-running-requests", str(options.sglang_max_running_requests), "--sglang-mem-fraction-static", str(options.sglang_mem_fraction),
@@ -239,6 +241,8 @@ def main():
     if replay_environment:
         arguments += ["--rollout-function-path", "qwen30b_replay_once.generate_rollout",
                       "--eval-function-path", "slime.rollout.sglang_rollout.generate_rollout"]
+    if precision_recipe:
+        arguments.extend(precision_recipe.arguments())
     invocation = [str(repo / "train.py")] + arguments
     manifest = {
         "run_id": run_id, "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -265,7 +269,7 @@ def main():
         "sglang_max_total_tokens": options.sglang_max_total_tokens,
         "sglang_input_logprobs_chunk_tokens": 64,
         "sglang_worker_environment": sglang_logprobs_environment | {
-            "PYTORCH_NPU_ALLOC_CONF": sglang_allocator_config, "MAX_COMPILE_CORE_NUMBER": "1"},
+            "PYTORCH_NPU_ALLOC_CONF": sglang_allocator_config, "MAX_COMPILE_CORE_NUMBER": "1"} | precision_environment,
         "rollout_offload": True, "train_offload": False,
         "sglang_weights_cpu_backup": False,
         "rollout_memory_policy": "tagged NPU weights/KV discard; disk reload before generation",
@@ -306,6 +310,8 @@ def main():
         "optimizer_resume_available": False, "pin_cpu_params": False, "pin_cpu_grads": False,
         "hf_model_destination": str(published), "status": "prepared", "argv": invocation,
     }
+    if precision_recipe:
+        manifest.update(precision_recipe.manifest())
     if offline_parent is not None:
         parent_report = output / "provenance/offline-parent40-validation.json"
         offline_lineage.atomic_json(parent_report, offline_parent)
@@ -342,11 +348,16 @@ def main():
     import ray
     import torch
     import torch_npu
+    if precision_recipe:
+        precision_recipe.register_driver_backend()
     from slime.utils.arguments import parse_args
     from slime.observability.logging_utils import configure_logger
     from train import main as train_main
     sys.argv = invocation
     args, restore_plan = parse_args(return_restore_plan=True)
+    if precision_recipe:
+        precision_recipe.verify_args(args, precision_environment)
+        args.attention_simulation = manifest["attention_simulation"]
     args.optimizer_step_hf_save_interval = options.hf_checkpoint_every_steps
     args.optimizer_step_hf_save_dir = str(output / "optimizer-step-checkpoints")
     args.optimizer_step_hf_completed_offset = parent_steps
@@ -359,7 +370,7 @@ def main():
         args.validation_trajectory_dir = str(validation_directory)
         args.validation_optimizer_step_offset = None if options.offline_checkpoint_validation else parent_steps
         args.validation_dataset_sha256 = hashlib.sha256(evaluation.read_bytes()).hexdigest()
-        args.validation_protocol_helper = str(workspace / "setup/validation_trajectory_protocol.py")
+        args.validation_protocol_helper = str(precision_recipe.validation_helper if precision_recipe else workspace / "setup/validation_trajectory_protocol.py")
         args.validation_protocol_helper_sha256 = hashlib.sha256(Path(args.validation_protocol_helper).read_bytes()).hexdigest()
         manifest["validation_protocol_helper"] = args.validation_protocol_helper
         manifest["validation_protocol_helper_sha256"] = args.validation_protocol_helper_sha256
@@ -439,7 +450,7 @@ def main():
                  runtime_env={"env_vars": {"SLIME_NPU_PRE_ABORT_ROLLOUT_BACKUP_DIR": str(raw_backup_directory)}
                               | sglang_logprobs_environment
                               | {"SLIME_SGLANG_NPU_ALLOC_CONF": sglang_allocator_config,
-                                 "MAX_COMPILE_CORE_NUMBER": "1"} | replay_environment | version_environment},
+                                 "MAX_COMPILE_CORE_NUMBER": "1"} | replay_environment | version_environment | precision_environment},
                  _system_config={"prestart_worker_first_driver": False, "enable_worker_prestart": False,
                                  "memory_usage_threshold": 0.98},
                  object_store_memory=2 * 1024**3, include_dashboard=False,
