@@ -13,7 +13,7 @@ def make_backend_class(base, core, config, pool_type=None, audit_callback=None):
     load_module("logical_kv")
     factory = load_module("sglang_bridge").make_backend_class
     shared = factory(base, core=core, config=config, pool_type=pool_type, audit_callback=audit_callback,
-                     snapshot_decode_addresses=IS_HIF4)
+                     snapshot_addresses=IS_HIF4)
 
     class C8V16AttentionBackend(shared):
         pass
@@ -87,7 +87,7 @@ def install(profile, audit):
 
         @wraps(original_forward)
         def forward(runner, forward_batch, *args, **kwargs):
-            if (runner.server_args.attention_backend == BACKEND_NAME and forward_batch.forward_mode.is_decode()):
+            if (runner.server_args.attention_backend == BACKEND_NAME and forward_batch.forward_mode.name in {"EXTEND", "DECODE"}):
                 with check_before_return():
                     return original_forward(runner, forward_batch, *args, **kwargs)
             return original_forward(runner, forward_batch, *args, **kwargs)

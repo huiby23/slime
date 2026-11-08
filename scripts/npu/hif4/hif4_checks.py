@@ -1,11 +1,11 @@
-"""Defer finite-flag readback only inside one SGLang decode forward."""
+"""Defer finite-flag readback only inside one SGLang model forward."""
 from contextlib import contextmanager
 from contextvars import ContextVar
 
 import torch
 
 
-_active = ContextVar("hif4_decode_flags", default=None)
+_active = ContextVar("hif4_forward_flags", default=None)
 
 
 def check_invalid(flag, label):
@@ -30,6 +30,6 @@ def check_before_return():
             flags = torch.stack([flag for _, flag in pending])
             if bool(flags.any()):
                 indices = flags.nonzero().flatten().tolist()
-                raise FloatingPointError(f"HiF4 decode failure at check {indices[0]}: {pending[indices[0]][0]}")
+                raise FloatingPointError(f"HiF4 forward failure at check {indices[0]}: {pending[indices[0]][0]}")
     finally:
         _active.reset(token)

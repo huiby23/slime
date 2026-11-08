@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import torch
 
 import c8v16_attention as vector
+from hif4_checks import check_invalid
 from hif4_quant import GROUP, quantize
 
 
@@ -32,4 +33,4 @@ def attention(q, k, v, config, *, query_offset=0):
                 and query_offset + 1 == k.size(2) and not any(t.requires_grad for t in (q, k, v))):
             from hif4_decode import decode
             return decode(q, k, v)
-        return vector._attention(q, k, v, config, query_offset, qdq=quantize, group_size=GROUP)
+        return vector._attention(q, k, v, config, query_offset, qdq=quantize, group_size=GROUP, check_invalid=check_invalid)

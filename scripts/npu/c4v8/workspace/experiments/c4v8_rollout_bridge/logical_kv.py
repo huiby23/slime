@@ -129,7 +129,7 @@ def _version(tensor):
         raise
 
 
-class DecodeAddresses:
+class ForwardAddresses:
     """Private, validated address snapshot for exactly one scheduler forward.
 
     Only integer indices are shared across layers. Every layer gathers its own
@@ -141,15 +141,16 @@ class DecodeAddresses:
         self.table_version = _version(table)
         self.location_version = _version(locations) if locations is not None else None
         lengths = [span.sequence_length for span in spans]
-        if not lengths or any(span.query_length != 1 for span in spans):
-            raise ValueError("Address snapshot requires nonempty single-query decode")
+        if not lengths:
+            raise ValueError("Address snapshot requires active requests")
+        write_count = sum(span.query_length for span in spans)
         parts = [table[span.request_index, :span.sequence_length].to(torch.int64) for span in spans]
         if locations is not None:
-            if (locations.device != table.device or locations.shape != (len(spans),)
+            if (locations.device != table.device or locations.shape != (write_count,)
                     or locations.dtype not in (torch.int32, torch.int64)):
                 raise ValueError("Invalid packed cache-write locations")
             parts.append(locations.to(torch.int64))
-            lengths.append(len(spans))
+            lengths.append(write_count)
         # cat takes ownership, including for a single span; never share mutable
         # source storage with gathers or set_kv_buffer.
         packed = torch.cat(parts)
@@ -165,11 +166,11 @@ class DecodeAddresses:
         self.locations = None
         if locations is not None:
             writes = host_rows[-1].tolist()
-            if writes != [seq[-1] for seq in sequences]:
+            if writes != [slot for seq, span in zip(sequences, spans) for slot in seq[span.prefix_length:]]:
                 raise ValueError("Write locations disagree with request logical mapping")
             if len(set(writes)) != len(writes):
                 raise ValueError("New KV writes alias within this batch")
-            if not set(writes).isdisjoint(slot for seq in sequences for slot in seq[:-1]):
+            if not set(writes).isdisjoint(slot for seq, span in zip(sequences, spans) for slot in seq[:span.prefix_length]):
                 raise ValueError("New KV writes alias a cached prefix in this batch")
             self.locations = views[-1].to(locations.dtype)
 
@@ -255,6 +256,10 @@ def forward_cached(q: torch.Tensor, key_cache: torch.Tensor, value_cache: torch.
         return torch.empty_like(q)
     if group_same_length_decode:
         return _forward_grouped_decode(q, key_cache, value_cache, spans, logical, core=core, config=config)
+    return _forward_requests(q, key_cache, value_cache, spans, logical, core=core, config=config)
+
+
+def _forward_requests(q, key_cache, value_cache, spans, logical, *, core, config):
     output = torch.empty_like(q)
     offset = 0
     for span, slots in zip(spans, logical):

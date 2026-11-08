@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "c4v8/workspace/experiments/c4v8_rollout_bridge"))
-from logical_kv import DecodeAddresses, RequestSpan
+from logical_kv import ForwardAddresses, RequestSpan
 from hif4_checks import check_before_return, check_invalid
 
 
@@ -26,11 +26,11 @@ class DecodeChecks(unittest.TestCase):
             spans = (RequestSpan(0, 2, 1), RequestSpan(1, 2, 1))
             locations = torch.tensor([19, 6], dtype=torch.int32)
             pool = object()
-            first = DecodeAddresses(table, locations, spans, 20, pool)
+            first = ForwardAddresses(table, locations, spans, 20, pool)
             first.verify(table, locations, 20, pool)
             table[0, 2] = 7
             locations[0] = 7
-            second = DecodeAddresses(table, locations, spans, 20, pool)
+            second = ForwardAddresses(table, locations, spans, 20, pool)
             self.assertEqual(first.logical[0].tolist(), [1, 2, 19])
             self.assertEqual(first.locations.tolist(), [19, 6])
             self.assertEqual(second.locations.tolist(), [7, 6])
@@ -48,13 +48,21 @@ class DecodeChecks(unittest.TestCase):
         ]
         for rows, writes in cases:
             with self.subTest(rows=rows), self.assertRaises(ValueError):
-                DecodeAddresses(torch.tensor(rows), torch.tensor(writes),
+                ForwardAddresses(torch.tensor(rows), torch.tensor(writes),
                                 (RequestSpan(0, 2, 1), RequestSpan(1, 2, 1)), 20, object())
+
+    def test_chunked_prefill_validates_all_current_writes(self):
+        table = torch.tensor([[2, 3, 6, 1], [2, 3, 7, 4]])
+        spans = (RequestSpan(0, 2, 2), RequestSpan(1, 2, 2))
+        addresses = ForwardAddresses(table, torch.tensor([6,1,7,4]), spans, 8, object())
+        self.assertEqual(addresses.locations.tolist(), [6,1,7,4])
+        with self.assertRaisesRegex(ValueError, "prefix"):
+            ForwardAddresses(torch.tensor([[2, 3, 6, 1], [1, 3, 7, 4]]), torch.tensor([6,1,7,4]), spans, 8, object())
 
     def test_tracked_mapping_mutation_detected(self):
         table = torch.tensor([[1, 2]], dtype=torch.int32)
         pool = object()
-        addresses = DecodeAddresses(table, None, (RequestSpan(0, 1, 1),), 3, pool)
+        addresses = ForwardAddresses(table, None, (RequestSpan(0, 1, 1),), 3, pool)
         table[0, 0] = 0
         with self.assertRaises(RuntimeError):
             addresses.verify(table, None, 3, pool)

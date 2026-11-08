@@ -151,7 +151,7 @@ def attention(q, k, v, config=AttentionConfig(), *, query_offset=0):
         return _attention(q, k, v, config, query_offset)
 
 
-def _attention(q, k, v, config, offset, *, qdq=mx, group_size=MX_WIDTH):
+def _attention(q, k, v, config, offset, *, qdq=mx, group_size=MX_WIDTH, check_invalid=None):
     end = offset + q.size(2)
     q_quant = qdq(bf(q.float()))
     k_quant = qdq(bf(k[:, :, :end].float()))
@@ -187,6 +187,9 @@ def _attention(q, k, v, config, offset, *, qdq=mx, group_size=MX_WIDTH):
             maximum = new_max
         chunks.append((numerator / denominator).bfloat16())
     out = torch.cat(chunks, dim=2)
-    if not bool(torch.isfinite(out).all()):
+    finite = torch.isfinite(out).all()
+    if check_invalid is not None:
+        check_invalid(finite.logical_not(), "Nonfinite attention output")
+    elif not bool(finite):
         raise FloatingPointError('Nonfinite C8V16 attention output')
     return out
