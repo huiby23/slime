@@ -4,6 +4,8 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 
+from hif4_checks import check_invalid
+
 
 @triton.jit
 def _bf16_rne(value):
@@ -61,6 +63,5 @@ def ascend_qdq(x):
     out = torch.empty_like(packed, dtype=torch.float32)
     flags = torch.empty(programs, dtype=torch.int32, device=x.device)
     _convert[(programs,)](packed, out, flags, block, enable_fp_fusion=False)
-    if bool((flags != 0).any()):
-        raise FloatingPointError("Nonfinite BF16 input to training HiF4 converter")
+    check_invalid(flags.amax().ne(0), "Nonfinite BF16 input to HiF4 converter")
     return out[:padded.numel()].reshape(padded.shape)[..., :x.size(-1)]

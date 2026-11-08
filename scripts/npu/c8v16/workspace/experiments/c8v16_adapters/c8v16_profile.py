@@ -43,7 +43,7 @@ MODULES = {
 }
 
 if IS_HIF4:
-    MODULES.update({name: HIF4_DIR for name in ("hif4_quant", "hif4_triton", "hif4_attention", "hif4_decode")})
+    MODULES.update({name: HIF4_DIR for name in ("hif4_quant", "hif4_triton", "hif4_attention", "hif4_decode", "hif4_checks")})
 else:
     MODULES.update(fused_mxfp8=SHARED / "c4v8_fused_qdq", nvfp4_triton=SHARED / "c4v8_fused_nvfp4")
 

@@ -69,6 +69,7 @@ class AttentionRecipe:
             "--sglang-decode-attention-backend", BACKEND,
             "--sglang-dtype", "bfloat16", "--sglang-kv-cache-dtype", "auto",
             "--sglang-python-executable", str(self.shim),
+            *(["--sglang-server-concurrency", "8", "--sglang-router-request-timeout-secs", "86400"] if IS_HIF4 else []),
             "--spec", *SPEC,
         ]
 
@@ -101,6 +102,8 @@ class AttentionRecipe:
             "rm_type": "math", "advantage_estimator": "grpo",
             "dynamic_sampling_filter_path": "slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std",
         }
+        if IS_HIF4:
+            required.update(sglang_server_concurrency=8, sglang_router_request_timeout_secs=86400)
         for field, expected in required.items():
             if getattr(args, field, None) != expected:
                 raise ValueError(f"Unexpected resolved {PRECISION} {field}: {getattr(args, field, None)!r}")

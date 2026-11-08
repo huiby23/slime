@@ -11,7 +11,8 @@ from typing import Callable
 
 import torch
 
-from logical_kv import (_check_common, forward_cached, spans_from_lengths,
+from logical_kv import (DecodeAddresses, _check_common, _check_new_values, _forward_grouped_decode,
+                        forward_cached, spans_from_lengths,
                         token_cache_view, validate_cache_write)
 
 
@@ -35,7 +36,8 @@ def _cpu_values(value, name: str, *, permit_device_copy: bool = False) -> list[i
     raise TypeError(f'{name} is missing or not CPU integer metadata')
 
 
-def make_backend_class(base_class, *, core: Callable, config, pool_type=None, audit_callback=None):
+def make_backend_class(base_class, *, core: Callable, config, pool_type=None, audit_callback=None,
+                       snapshot_decode_addresses=False):
     """Inject the exact attention core and optionally the actual NPU pool type."""
     class C4V8AttentionBackend(base_class):
         def __init__(self, model_runner):
@@ -56,6 +58,7 @@ def make_backend_class(base_class, *, core: Callable, config, pool_type=None, au
                 raise ValueError('Invalid configured page size')
             self.forward_metadata = None
             self.metadata_batch = None
+            self.decode_addresses = None
             self.metadata_device_to_host_transfers = 0
             self._audited_forward_modes = set()
             actual_hf32=None
@@ -77,6 +80,7 @@ def make_backend_class(base_class, *, core: Callable, config, pool_type=None, au
                 })
 
         def init_forward_metadata(self, forward_batch):
+            self.decode_addresses = None
             mode = forward_batch.forward_mode
             if mode.is_idle():
                 self.forward_metadata = ()
@@ -132,18 +136,31 @@ def make_backend_class(base_class, *, core: Callable, config, pool_type=None, au
             table = forward_batch.req_to_token_pool.req_to_token
             spans = self.forward_metadata
             _check_common(query, kc, vc, table, spans, layer.scaling, True)
+            decode = forward_batch.forward_mode.is_decode()
+            addresses = None
+            if snapshot_decode_addresses and decode:
+                locations = forward_batch.out_cache_loc if save_kv_cache else None
+                if self.decode_addresses is None:
+                    self.decode_addresses = DecodeAddresses(table, locations, spans, kc.size(0), pool)
+                addresses = self.decode_addresses
+                addresses.verify(table, locations, kc.size(0), pool)
             if save_kv_cache:
                 if k is None or v is None:
                     raise ValueError('Missing KV for native cache update')
                 keys = k.reshape(-1, layer.tp_k_head_num, layer.qk_head_dim)
                 values = v.reshape(-1, layer.tp_v_head_num, layer.v_head_dim)
-                validate_cache_write(query, kc, vc, table, spans, keys, values,
-                                     forward_batch.out_cache_loc)
-                # Preserve the native write API; never pack low-bit values into KV.
-                pool.set_kv_buffer(layer, forward_batch.out_cache_loc, keys, values)
-            output = forward_cached(query, kc, vc, table, spans, core=core, config=config,
-                                    scale=layer.scaling,
-                                    group_same_length_decode=forward_batch.forward_mode.is_decode())
+                if addresses is None:
+                    locations = forward_batch.out_cache_loc
+                    validate_cache_write(query, kc, vc, table, spans, keys, values, locations)
+                else:
+                    _check_new_values(query, kc, vc, keys, values)
+                    locations = addresses.locations
+                pool.set_kv_buffer(layer, locations, keys, values)
+            if addresses is None:
+                output = forward_cached(query, kc, vc, table, spans, core=core, config=config,
+                                        scale=layer.scaling, group_same_length_decode=decode)
+            else:
+                output = _forward_grouped_decode(query, kc, vc, spans, addresses.logical, core=core, config=config)
             mode = forward_batch.forward_mode.name
             if audit_callback is not None and mode not in self._audited_forward_modes:
                 audit_callback('first_' + mode.lower(), {

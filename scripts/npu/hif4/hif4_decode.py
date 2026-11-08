@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import triton
 import triton.language as tl
 
+from hif4_checks import check_invalid
 from hif4_quant import GROUP, quantize
 from hif4_triton import _bf16_rne
 
@@ -76,6 +77,5 @@ def decode(q, k, v):
     den = torch.empty((rows, 32), device=q.device, dtype=torch.float32)
     _update_states[(rows,)](state, contributions.contiguous(), num, den, tiles, dim, enable_fp_fusion=False)
     output = (num / den[:, :1]).bfloat16().reshape(batch, heads, 1, dim)
-    if not bool(torch.isfinite(output).all()):
-        raise FloatingPointError('Nonfinite HiF4 decode')
+    check_invalid(torch.isfinite(output).all().logical_not(), "Nonfinite HiF4 decode")
     return output

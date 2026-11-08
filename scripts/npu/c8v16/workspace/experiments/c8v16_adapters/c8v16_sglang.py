@@ -4,7 +4,7 @@ import copy
 from functools import wraps
 import sys
 
-from c8v16_profile import BACKEND_NAME, load_module
+from c8v16_profile import BACKEND_NAME, IS_HIF4, load_module
 
 
 def make_backend_class(base, core, config, pool_type=None, audit_callback=None):
@@ -12,7 +12,8 @@ def make_backend_class(base, core, config, pool_type=None, audit_callback=None):
     # request isolation code. Its numerics are injected through the core callback.
     load_module("logical_kv")
     factory = load_module("sglang_bridge").make_backend_class
-    shared = factory(base, core=core, config=config, pool_type=pool_type, audit_callback=audit_callback)
+    shared = factory(base, core=core, config=config, pool_type=pool_type, audit_callback=audit_callback,
+                     snapshot_decode_addresses=IS_HIF4)
 
     class C8V16AttentionBackend(shared):
         pass
@@ -79,6 +80,19 @@ def install(profile, audit):
     cls = make_backend_class(AttentionBackend, profile.core.attention, profile.config, NPUMHATokenToKVPool, audit)
     register_cli_choice()
     ATTENTION_BACKENDS[BACKEND_NAME] = lambda runner: cls(runner)
+    if IS_HIF4:
+        from sglang.srt.model_executor.model_runner import ModelRunner
+        check_before_return = load_module("hif4_checks").check_before_return
+        original_forward = ModelRunner.forward
+
+        @wraps(original_forward)
+        def forward(runner, forward_batch, *args, **kwargs):
+            if (runner.server_args.attention_backend == BACKEND_NAME and forward_batch.forward_mode.is_decode()):
+                with check_before_return():
+                    return original_forward(runner, forward_batch, *args, **kwargs)
+            return original_forward(runner, forward_batch, *args, **kwargs)
+
+        ModelRunner.forward = forward
     utils.set_default_server_args = wrap_defaults(utils.set_default_server_args)
     ModelRunnerKVCacheMixin.init_memory_pool = wrap_pool(
         ModelRunnerKVCacheMixin.init_memory_pool, NPUMHATokenToKVPool, NPUPagedTokenToKVPoolAllocator, audit)

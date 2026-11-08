@@ -111,6 +111,75 @@ def _logical_slots(req_to_token: torch.Tensor, span: RequestSpan,
     return slots
 
 
+def _check_new_values(q, key_cache, value_cache, new_key, new_value):
+    expected_shape = (q.shape[0], key_cache.shape[1], key_cache.shape[2])
+    if new_key.shape != expected_shape or new_value.shape != expected_shape:
+        raise ValueError('New KV tokens do not match packed query spans')
+    if (new_key.dtype != key_cache.dtype or new_value.dtype != value_cache.dtype
+            or new_key.device != q.device or new_value.device != q.device):
+        raise ValueError('New KV storage differs from the cache')
+
+
+def _version(tensor):
+    try:
+        return tensor._version
+    except RuntimeError:
+        if torch.is_inference(tensor):
+            return None
+        raise
+
+
+class DecodeAddresses:
+    """Private, validated address snapshot for exactly one scheduler forward.
+
+    Only integer indices are shared across layers. Every layer gathers its own
+    native BF16 K/V and requantizes the whole visible prefix as usual.
+    """
+    def __init__(self, table, locations, spans, capacity, pool):
+        self.table, self.external_locations, self.pool = table, locations, pool
+        self.capacity = capacity
+        self.table_version = _version(table)
+        self.location_version = _version(locations) if locations is not None else None
+        lengths = [span.sequence_length for span in spans]
+        if not lengths or any(span.query_length != 1 for span in spans):
+            raise ValueError("Address snapshot requires nonempty single-query decode")
+        parts = [table[span.request_index, :span.sequence_length].to(torch.int64) for span in spans]
+        if locations is not None:
+            if (locations.device != table.device or locations.shape != (len(spans),)
+                    or locations.dtype not in (torch.int32, torch.int64)):
+                raise ValueError("Invalid packed cache-write locations")
+            parts.append(locations.to(torch.int64))
+            lengths.append(len(spans))
+        # cat takes ownership, including for a single span; never share mutable
+        # source storage with gathers or set_kv_buffer.
+        packed = torch.cat(parts)
+        views = packed.split(lengths)
+        self.logical = views[:len(spans)]
+        host_rows = packed.cpu().split(lengths)
+        sequences = [row.tolist() for row in host_rows[:len(spans)]]
+        for seq in sequences:
+            if min(seq) < 0 or max(seq) >= capacity:
+                raise ValueError("Invalid physical KV address in active logical sequence")
+            if len(set(seq)) != len(seq):
+                raise ValueError("A logical sequence repeats physical token slots")
+        self.locations = None
+        if locations is not None:
+            writes = host_rows[-1].tolist()
+            if writes != [seq[-1] for seq in sequences]:
+                raise ValueError("Write locations disagree with request logical mapping")
+            if len(set(writes)) != len(writes):
+                raise ValueError("New KV writes alias within this batch")
+            if not set(writes).isdisjoint(slot for seq in sequences for slot in seq[:-1]):
+                raise ValueError("New KV writes alias a cached prefix in this batch")
+            self.locations = views[-1].to(locations.dtype)
+
+    def verify(self, table, locations, capacity, pool):
+        if (self.table is not table or self.external_locations is not locations or self.pool is not pool
+                or capacity != self.capacity or self.table_version != _version(table)
+                or (locations is not None and self.location_version != _version(locations))):
+            raise RuntimeError("KV address inputs changed during the same forward")
+
+
 def validate_cache_write(q: torch.Tensor, key_cache: torch.Tensor, value_cache: torch.Tensor,
                          req_to_token: torch.Tensor, spans: Sequence[RequestSpan],
                          new_key: torch.Tensor, new_value: torch.Tensor,
@@ -123,12 +192,7 @@ def validate_cache_write(q: torch.Tensor, key_cache: torch.Tensor, value_cache: 
     if not spans:
         raise ValueError('An idle batch must not write KV')
     logical = [_logical_slots(req_to_token, span, key_cache.shape[0]) for span in spans]
-    expected_shape = (q.shape[0], key_cache.shape[1], key_cache.shape[2])
-    if new_key.shape != expected_shape or new_value.shape != expected_shape:
-        raise ValueError('New KV tokens do not match packed query spans')
-    if (new_key.dtype != key_cache.dtype or new_value.dtype != value_cache.dtype
-            or new_key.device != q.device or new_value.device != q.device):
-        raise ValueError('New KV storage differs from the cache')
+    _check_new_values(q, key_cache, value_cache, new_key, new_value)
     if (out_cache_locations.device != q.device or out_cache_locations.ndim != 1
             or out_cache_locations.numel() != q.shape[0]
             or out_cache_locations.dtype not in (torch.int32, torch.int64)):
