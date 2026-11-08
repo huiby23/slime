@@ -104,9 +104,22 @@ if __name__=="__main__":
     parser.add_argument("candidate",type=Path)
     parser.add_argument("output",type=Path)
     parser.add_argument("--memory-baseline",type=Path)
+    parser.add_argument("--paired-attention",type=Path,help="Full same-input 48-layer reference/candidate comparison")
     args=parser.parse_args()
     report=compare(args.baseline,args.candidate,args.memory_baseline)
+    if args.paired_attention:
+        checks=json.loads(args.paired_attention.read_text())
+        if (checks.get("identical") is not True or checks.get("layers")!=48 or checks.get("ranks")!=8
+                or checks["baseline_implementation"]!=report["baseline"] or checks["candidate_implementation"]!=report["candidate"]
+                or checks["policy_sha256"]!=report["policy"]):
+            raise ValueError("Paired real-model evidence does not cover these two implementations")
+        report["same_input_attention_bitwise_equal"]=True
+        report["paired_attention_evidence"]=str(args.paired_attention)
+    report["independent_logprobs_and_ids_bitwise_equal"]=report["exact"]
+    report["greedy_tokens_equal"]=all(x["token_mismatches"]==0 for x in report["pairs"])
     args.output.write_text(json.dumps(report,indent=2,allow_nan=False))
     print(json.dumps({k:report[k] for k in ("exact","warm_median_by_prefix","peak_sampled_hbm_mib")}))
-    if not report["exact"]:
-        raise SystemExit("Token/logprob mismatch: examine paired requests before choosing the optimization")
+    if not report["greedy_tokens_equal"]:
+        raise SystemExit("Different greedy tokens")
+    if not report["exact"] and not report.get("same_input_attention_bitwise_equal"):
+        raise SystemExit("Independent logprobs differ; a paired same-input check is required")

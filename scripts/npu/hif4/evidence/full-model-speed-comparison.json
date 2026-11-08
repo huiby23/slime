@@ -1,0 +1,236 @@
+{
+  "policy": "231d5065e4e72035a2c62f2cde5eddaa51072daac4e04f68059f3a56e1c1310c",
+  "baseline": "b07b2fa2080d104f76ced321ec3be37f909c25366c3927f09cfd190a35d4342f",
+  "candidate": "43d426090a1e40af3b9b12f4015940995d2d4627d30c3377536c7549c1a0ecda",
+  "peak_sampled_hbm_mib": [
+    [
+      12116,
+      12076,
+      12074,
+      12074,
+      12075,
+      12074,
+      12073,
+      12074
+    ],
+    [
+      12156,
+      12115,
+      12114,
+      12113,
+      12114,
+      12115,
+      12114,
+      12115
+    ]
+  ],
+  "baseline_memory_run": "/root/hby/logs/hif4-c4v16-launch-tests/peak-hbm-baseline-v1",
+  "pairs": [
+    {
+      "length": 1024,
+      "repeat": 0,
+      "e2e_tokens_s": [
+        0.6514486514832479,
+        0.8141607627359191
+      ],
+      "token_mismatches": 0,
+      "checked_prompt": 3072,
+      "checked_output": 36,
+      "max_abs_logprob_diff": 9.210963487625122,
+      "baseline": {
+        "seconds": 9.324847340001725,
+        "tokens": 33,
+        "batch_decode_tokens_s": 3.5389319306533435
+      },
+      "candidate": {
+        "seconds": 14.202959329937585,
+        "tokens": 33,
+        "batch_decode_tokens_s": 2.323459444852541
+      }
+    },
+    {
+      "length": 1024,
+      "repeat": 1,
+      "e2e_tokens_s": [
+        0.8339396636437252,
+        1.5759682630773915
+      ],
+      "token_mismatches": 0,
+      "checked_prompt": 3072,
+      "checked_output": 36,
+      "max_abs_logprob_diff": 10.92301321029663,
+      "baseline": {
+        "seconds": 8.941301279934123,
+        "tokens": 33,
+        "batch_decode_tokens_s": 3.6907379548945403
+      },
+      "candidate": {
+        "seconds": 3.8104542000219226,
+        "tokens": 33,
+        "batch_decode_tokens_s": 8.660384895798023
+      }
+    },
+    {
+      "length": 1024,
+      "repeat": 2,
+      "e2e_tokens_s": [
+        0.8391966020435122,
+        1.5957712876545047
+      ],
+      "token_mismatches": 0,
+      "checked_prompt": 3072,
+      "checked_output": 36,
+      "max_abs_logprob_diff": 8.83296012878418,
+      "baseline": {
+        "seconds": 9.012668929994106,
+        "tokens": 33,
+        "batch_decode_tokens_s": 3.661512506043155
+      },
+      "candidate": {
+        "seconds": 3.8109683700604364,
+        "tokens": 33,
+        "batch_decode_tokens_s": 8.659216449880079
+      }
+    },
+    {
+      "length": 3968,
+      "repeat": 0,
+      "e2e_tokens_s": [
+        0.1304762625395314,
+        0.19376880987943373
+      ],
+      "token_mismatches": 0,
+      "checked_prompt": 11904,
+      "checked_output": 36,
+      "max_abs_logprob_diff": 9.25909948348999,
+      "baseline": {
+        "seconds": 15.391874690074474,
+        "tokens": 33,
+        "batch_decode_tokens_s": 2.143988348688949
+      },
+      "candidate": {
+        "seconds": 6.076669569942169,
+        "tokens": 33,
+        "batch_decode_tokens_s": 5.430606291846482
+      }
+    },
+    {
+      "length": 3968,
+      "repeat": 1,
+      "e2e_tokens_s": [
+        0.13187893031304,
+        0.19347113218057072
+      ],
+      "token_mismatches": 0,
+      "checked_prompt": 11904,
+      "checked_output": 36,
+      "max_abs_logprob_diff": 13.400891900062561,
+      "baseline": {
+        "seconds": 15.299726510071196,
+        "tokens": 33,
+        "batch_decode_tokens_s": 2.156901300051176
+      },
+      "candidate": {
+        "seconds": 6.007210099953227,
+        "tokens": 33,
+        "batch_decode_tokens_s": 5.493398674412427
+      }
+    },
+    {
+      "length": 3968,
+      "repeat": 2,
+      "e2e_tokens_s": [
+        0.1315185623077459,
+        0.19176814644029727
+      ],
+      "token_mismatches": 0,
+      "checked_prompt": 11904,
+      "checked_output": 36,
+      "max_abs_logprob_diff": 8.922959804534912,
+      "baseline": {
+        "seconds": 15.508485709899105,
+        "tokens": 33,
+        "batch_decode_tokens_s": 2.127867324850164
+      },
+      "candidate": {
+        "seconds": 5.940729760099202,
+        "tokens": 33,
+        "batch_decode_tokens_s": 5.554873110311105
+      }
+    }
+  ],
+  "optimizer_updates": 0,
+  "exact": false,
+  "within_implementation_repeat_variability": [
+    {
+      "1024": {
+        "prompt": {
+          "max_abs_logprob_diff": 8.345198631286621,
+          "token_mismatches": 0
+        },
+        "output": {
+          "max_abs_logprob_diff": 0.0002773448977677617,
+          "token_mismatches": 0
+        }
+      },
+      "3968": {
+        "prompt": {
+          "max_abs_logprob_diff": 10.621644020080566,
+          "token_mismatches": 0
+        },
+        "output": {
+          "max_abs_logprob_diff": 0.0008605020702816546,
+          "token_mismatches": 0
+        }
+      }
+    },
+    {
+      "1024": {
+        "prompt": {
+          "max_abs_logprob_diff": 8.463266372680664,
+          "token_mismatches": 0
+        },
+        "output": {
+          "max_abs_logprob_diff": 0.0005557173301440343,
+          "token_mismatches": 0
+        }
+      },
+      "3968": {
+        "prompt": {
+          "max_abs_logprob_diff": 11.563031911849976,
+          "token_mismatches": 0
+        },
+        "output": {
+          "max_abs_logprob_diff": 0.0014304242213256657,
+          "token_mismatches": 0
+        }
+      }
+    }
+  ],
+  "warm_median_by_prefix": {
+    "1024": {
+      "decode_tokens_s": [
+        3.6761252304688474,
+        8.65980067283905
+      ],
+      "e2e_tokens_s": [
+        0.8365681328436188,
+        1.585869775365948
+      ]
+    },
+    "3968": {
+      "decode_tokens_s": [
+        2.1423843124506696,
+        5.524135892361766
+      ],
+      "e2e_tokens_s": [
+        0.13169874631039294,
+        0.192619639310434
+      ]
+    }
+  },
+  "same_input_attention_bitwise_equal": true,
+  "paired_attention_evidence": "/root/hby/logs/hif4-c4v16-launch-tests/paired-forward-summary.json",
+  "independent_logprobs_and_ids_bitwise_equal": false,
+  "greedy_tokens_equal": true
+}

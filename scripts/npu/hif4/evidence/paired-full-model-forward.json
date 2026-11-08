@@ -1,0 +1,178 @@
+{
+  "identical": true,
+  "ranks": 8,
+  "layers": 48,
+  "scope": "same real per-layer Q/K/V inputs in the same Qwen3-30B-A3B forward; BF16 bitwise comparison",
+  "total_layer_rank_calls": 24960,
+  "bf16_values": 2947940352,
+  "raw_probe": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1",
+  "reference_repo": "/root/hby/git-export/slime-hif4-training-v1",
+  "tested_candidate_repo": "/root/hby/git-export/slime-hif4-speed-v3",
+  "paired_test_repo": "/root/hby/git-export/slime-hif4-paired-test-v1",
+  "records": [
+    {
+      "rank": 0,
+      "mode": "EXTEND",
+      "layers": 48,
+      "events": 2832,
+      "bf16_values": 368050176,
+      "max_prefix": 3840,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp0.jsonl",
+      "sha256": "4ba8918d3e613a4390375a0f662c761d44a662d713aa49b0a2d2593c21e64289"
+    },
+    {
+      "rank": 0,
+      "mode": "DECODE",
+      "layers": 48,
+      "events": 288,
+      "bf16_values": 442368,
+      "max_prefix": 3970,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp0.jsonl",
+      "sha256": "4ba8918d3e613a4390375a0f662c761d44a662d713aa49b0a2d2593c21e64289"
+    },
+    {
+      "rank": 1,
+      "mode": "EXTEND",
+      "layers": 48,
+      "events": 2832,
+      "bf16_values": 368050176,
+      "max_prefix": 3840,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp1.jsonl",
+      "sha256": "ace5adb813f5ef5a9f0b21dbf30b92b941bff8aae61437473213817972587d96"
+    },
+    {
+      "rank": 1,
+      "mode": "DECODE",
+      "layers": 48,
+      "events": 288,
+      "bf16_values": 442368,
+      "max_prefix": 3970,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp1.jsonl",
+      "sha256": "ace5adb813f5ef5a9f0b21dbf30b92b941bff8aae61437473213817972587d96"
+    },
+    {
+      "rank": 2,
+      "mode": "EXTEND",
+      "layers": 48,
+      "events": 2832,
+      "bf16_values": 368050176,
+      "max_prefix": 3840,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp2.jsonl",
+      "sha256": "9a7f1b96251b68b74cb4b3830a28b1219a35c0431c5b259dbc045b847a5ee987"
+    },
+    {
+      "rank": 2,
+      "mode": "DECODE",
+      "layers": 48,
+      "events": 288,
+      "bf16_values": 442368,
+      "max_prefix": 3970,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp2.jsonl",
+      "sha256": "9a7f1b96251b68b74cb4b3830a28b1219a35c0431c5b259dbc045b847a5ee987"
+    },
+    {
+      "rank": 3,
+      "mode": "EXTEND",
+      "layers": 48,
+      "events": 2832,
+      "bf16_values": 368050176,
+      "max_prefix": 3840,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp3.jsonl",
+      "sha256": "22dc3550e4e656ea217c1286ba4a00991ee9253d6c0df8e00dcb8a292e10755a"
+    },
+    {
+      "rank": 3,
+      "mode": "DECODE",
+      "layers": 48,
+      "events": 288,
+      "bf16_values": 442368,
+      "max_prefix": 3970,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp3.jsonl",
+      "sha256": "22dc3550e4e656ea217c1286ba4a00991ee9253d6c0df8e00dcb8a292e10755a"
+    },
+    {
+      "rank": 4,
+      "mode": "EXTEND",
+      "layers": 48,
+      "events": 2832,
+      "bf16_values": 368050176,
+      "max_prefix": 3840,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp4.jsonl",
+      "sha256": "f49c8aed70318f0b06a25200035d9c02ba1e814588beb501e81411c69336b59e"
+    },
+    {
+      "rank": 4,
+      "mode": "DECODE",
+      "layers": 48,
+      "events": 288,
+      "bf16_values": 442368,
+      "max_prefix": 3970,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp4.jsonl",
+      "sha256": "f49c8aed70318f0b06a25200035d9c02ba1e814588beb501e81411c69336b59e"
+    },
+    {
+      "rank": 5,
+      "mode": "EXTEND",
+      "layers": 48,
+      "events": 2832,
+      "bf16_values": 368050176,
+      "max_prefix": 3840,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp5.jsonl",
+      "sha256": "17730dc45ef8a1fcdfa4861c393399dc082b43a483c054cfff28a156181705d2"
+    },
+    {
+      "rank": 5,
+      "mode": "DECODE",
+      "layers": 48,
+      "events": 288,
+      "bf16_values": 442368,
+      "max_prefix": 3970,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp5.jsonl",
+      "sha256": "17730dc45ef8a1fcdfa4861c393399dc082b43a483c054cfff28a156181705d2"
+    },
+    {
+      "rank": 6,
+      "mode": "EXTEND",
+      "layers": 48,
+      "events": 2832,
+      "bf16_values": 368050176,
+      "max_prefix": 3840,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp6.jsonl",
+      "sha256": "90ea7edfac71adfc754e5fec978bc5b45f2a1d68dd30b14c88a04a0e9f6481aa"
+    },
+    {
+      "rank": 6,
+      "mode": "DECODE",
+      "layers": 48,
+      "events": 288,
+      "bf16_values": 442368,
+      "max_prefix": 3970,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp6.jsonl",
+      "sha256": "90ea7edfac71adfc754e5fec978bc5b45f2a1d68dd30b14c88a04a0e9f6481aa"
+    },
+    {
+      "rank": 7,
+      "mode": "EXTEND",
+      "layers": 48,
+      "events": 2832,
+      "bf16_values": 368050176,
+      "max_prefix": 3840,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp7.jsonl",
+      "sha256": "df128d3d3fe6ff450abe52c3dff67a6d257f760c18fdd1af9eaf5a42b9ed0dbd"
+    },
+    {
+      "rank": 7,
+      "mode": "DECODE",
+      "layers": 48,
+      "events": 288,
+      "bf16_values": 442368,
+      "max_prefix": 3970,
+      "source": "/root/hby/logs/hif4-c4v16-launch-tests/same-input-real-model-v1/paired-tp7.jsonl",
+      "sha256": "df128d3d3fe6ff450abe52c3dff67a6d257f760c18fdd1af9eaf5a42b9ed0dbd"
+    }
+  ],
+  "baseline_implementation": "b07b2fa2080d104f76ced321ec3be37f909c25366c3927f09cfd190a35d4342f",
+  "candidate_implementation": "43d426090a1e40af3b9b12f4015940995d2d4627d30c3377536c7549c1a0ecda",
+  "policy_sha256": "231d5065e4e72035a2c62f2cde5eddaa51072daac4e04f68059f3a56e1c1310c",
+  "instrumented_probe_implementation": "a4bdbfd3dd679a349b85f3695031fd17ec0bfa0ce14195bb64d10bc734a3a31d"
+}

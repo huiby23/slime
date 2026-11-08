@@ -1,0 +1,174 @@
+{
+  "passed": true,
+  "ranks": [
+    {
+      "passed": true,
+      "save_pid": 3387840,
+      "restore_pid": 3395333,
+      "shard_sha": "946d82e12f44f129c263fcd3be4ac0616f1f058911bc2c7d1f262abbbb777369",
+      "cpu_npu": {
+        "cpu_parameters": 2,
+        "npu_parameters": 2
+      },
+      "rank": 0,
+      "world": 8,
+      "train_tp": 4,
+      "train_pp": 2,
+      "expert_parallel": 4,
+      "matched_states": 203,
+      "next_update": [
+        1.0050806999206543,
+        0.960379741038842
+      ],
+      "next_cursor": 6
+    },
+    {
+      "passed": true,
+      "save_pid": 3387841,
+      "restore_pid": 3395334,
+      "shard_sha": "946d82e12f44f129c263fcd3be4ac0616f1f058911bc2c7d1f262abbbb777369",
+      "cpu_npu": {
+        "cpu_parameters": 2,
+        "npu_parameters": 2
+      },
+      "rank": 1,
+      "world": 8,
+      "train_tp": 4,
+      "train_pp": 2,
+      "expert_parallel": 4,
+      "matched_states": 203,
+      "next_update": [
+        1.0050806999206543,
+        0.960379741038842
+      ],
+      "next_cursor": 6
+    },
+    {
+      "passed": true,
+      "save_pid": 3387842,
+      "restore_pid": 3395335,
+      "shard_sha": "946d82e12f44f129c263fcd3be4ac0616f1f058911bc2c7d1f262abbbb777369",
+      "cpu_npu": {
+        "cpu_parameters": 2,
+        "npu_parameters": 2
+      },
+      "rank": 2,
+      "world": 8,
+      "train_tp": 4,
+      "train_pp": 2,
+      "expert_parallel": 4,
+      "matched_states": 203,
+      "next_update": [
+        1.0050806999206543,
+        0.960379741038842
+      ],
+      "next_cursor": 6
+    },
+    {
+      "passed": true,
+      "save_pid": 3387843,
+      "restore_pid": 3395336,
+      "shard_sha": "946d82e12f44f129c263fcd3be4ac0616f1f058911bc2c7d1f262abbbb777369",
+      "cpu_npu": {
+        "cpu_parameters": 2,
+        "npu_parameters": 2
+      },
+      "rank": 3,
+      "world": 8,
+      "train_tp": 4,
+      "train_pp": 2,
+      "expert_parallel": 4,
+      "matched_states": 203,
+      "next_update": [
+        1.0050806999206543,
+        0.960379741038842
+      ],
+      "next_cursor": 6
+    },
+    {
+      "passed": true,
+      "save_pid": 3387844,
+      "restore_pid": 3395337,
+      "shard_sha": "946d82e12f44f129c263fcd3be4ac0616f1f058911bc2c7d1f262abbbb777369",
+      "cpu_npu": {
+        "cpu_parameters": 2,
+        "npu_parameters": 2
+      },
+      "rank": 4,
+      "world": 8,
+      "train_tp": 4,
+      "train_pp": 2,
+      "expert_parallel": 4,
+      "matched_states": 203,
+      "next_update": [
+        1.0050806999206543,
+        0.960379741038842
+      ],
+      "next_cursor": 6
+    },
+    {
+      "passed": true,
+      "save_pid": 3387845,
+      "restore_pid": 3395338,
+      "shard_sha": "946d82e12f44f129c263fcd3be4ac0616f1f058911bc2c7d1f262abbbb777369",
+      "cpu_npu": {
+        "cpu_parameters": 2,
+        "npu_parameters": 2
+      },
+      "rank": 5,
+      "world": 8,
+      "train_tp": 4,
+      "train_pp": 2,
+      "expert_parallel": 4,
+      "matched_states": 203,
+      "next_update": [
+        1.0050806999206543,
+        0.960379741038842
+      ],
+      "next_cursor": 6
+    },
+    {
+      "passed": true,
+      "save_pid": 3387846,
+      "restore_pid": 3395339,
+      "shard_sha": "946d82e12f44f129c263fcd3be4ac0616f1f058911bc2c7d1f262abbbb777369",
+      "cpu_npu": {
+        "cpu_parameters": 2,
+        "npu_parameters": 2
+      },
+      "rank": 6,
+      "world": 8,
+      "train_tp": 4,
+      "train_pp": 2,
+      "expert_parallel": 4,
+      "matched_states": 203,
+      "next_update": [
+        1.0050806999206543,
+        0.960379741038842
+      ],
+      "next_cursor": 6
+    },
+    {
+      "passed": true,
+      "save_pid": 3387847,
+      "restore_pid": 3395340,
+      "shard_sha": "946d82e12f44f129c263fcd3be4ac0616f1f058911bc2c7d1f262abbbb777369",
+      "cpu_npu": {
+        "cpu_parameters": 2,
+        "npu_parameters": 2
+      },
+      "rank": 7,
+      "world": 8,
+      "train_tp": 4,
+      "train_pp": 2,
+      "expert_parallel": 4,
+      "matched_states": 203,
+      "next_update": [
+        1.0050806999206543,
+        0.960379741038842
+      ],
+      "next_cursor": 6
+    }
+  ],
+  "total_state_checks": 1624
+}
