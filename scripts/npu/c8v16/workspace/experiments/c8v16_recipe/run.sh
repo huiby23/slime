@@ -19,7 +19,7 @@ export TORCHINDUCTOR_COMPILE_THREADS=1 TORCH_WARM_POOL=0 TE_PARALLEL_COMPILER=2 
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HOME="$workspace/.cache/huggingface"
 export TOKENIZERS_PARALLELISM=false RAY_USAGE_STATS_ENABLED=0 RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES=1
 export OMP_NUM_THREADS=8 OPENBLAS_NUM_THREADS=8 MAX_JOBS=2 CUDA_DEVICE_MAX_CONNECTIONS=1 PYTHONUNBUFFERED=1
-export XDG_CACHE_HOME="$workspace/cache" TORCH_HOME="$workspace/cache/torch" TRITON_CACHE_DIR="$workspace/cache/triton-c8v16"
+export XDG_CACHE_HOME="$workspace/cache" TORCH_HOME="$workspace/cache/torch" TRITON_CACHE_DIR="${SLIME_FA_TRITON_CACHE:-$workspace/cache/triton-c8v16}"
 export TORCH_EXTENSIONS_DIR="$workspace/cache/torch-extensions" TMPDIR="$workspace/tmp"
 export PYTHONPATH="$repo:$workspace/deps/Megatron-LM:$workspace/deps/MindSpeed:$workspace/deps/mbridge:$workspace/deps/Megatron-Bridge/src:${PYTHONPATH:-}"
 mkdir -p "$TMPDIR" "$TORCH_EXTENSIONS_DIR" "$TRITON_CACHE_DIR"

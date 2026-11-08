@@ -37,7 +37,10 @@ class RecipeTests(unittest.TestCase):
             for key in ["HBY_C8V16_POLICY_SHA256", "HBY_C8V16_IMPLEMENTATION_SHA256"]:
                 self.assertEqual(train_env[key], sg_env[key])
                 self.assertEqual(len(train_env[key]), 64)
-            self.assertIn("W16A16C8V16", info["precision"])
+            self.assertIn(recipe.PRECISION, info["precision"])
+            self.assertEqual(train_env["SLIME_FA_CUBE_FORMAT"], recipe.CUBE_FORMAT)
+            if recipe.IS_HIF4:
+                self.assertEqual(info["attention_simulation"]["policy"]["p_method"], "single_hif4_qdq_before_pv")
             self.assertEqual(info["target_new_optimizer_steps"], 100)
             self.assertEqual(info["validation_expected_global_steps"], list(range(0, 101, 5)))
             self.assertEqual(info["evaluation"]["questions"], 30)

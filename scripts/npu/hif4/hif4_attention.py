@@ -28,4 +28,8 @@ def attention(q, k, v, config, *, query_offset=0):
         raise TypeError("HiF4 requires an explicit HiF4 attention configuration")
     vector._validate(q, k, v, config, query_offset)
     with torch.autocast(device_type=q.device.type, enabled=False):
+        if (q.device.type != "cpu" and q.shape[-2:] == (1, 128) and config.key_block == 128
+                and query_offset + 1 == k.size(2) and not any(t.requires_grad for t in (q, k, v))):
+            from hif4_decode import decode
+            return decode(q, k, v)
         return vector._attention(q, k, v, config, query_offset, qdq=quantize, group_size=GROUP)

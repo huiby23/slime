@@ -1,0 +1,10 @@
+{
+  "query_block": 128,
+  "key_block": 128,
+  "causal": true,
+  "quantize_operands": true,
+  "vector": "bf16",
+  "reduction": "mixed_fp32_reduction",
+  "cube_format": "hif4_e6m2_s1p2_64_8_4",
+  "p_method": "single_hif4_qdq_before_pv"
+}

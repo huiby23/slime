@@ -15,10 +15,10 @@ from unittest.mock import patch
 import torch
 
 from c8v16_megatron_spec import C8V16CoreAttention, replace_attention
-from c8v16_profile import BACKEND_NAME, _digest, implementation_sha256, load_module, load_profile
+from c8v16_profile import BACKEND_NAME, CORE_MODULE, IS_HIF4, _digest, implementation_sha256, load_module, load_profile
 from c8v16_sglang import make_backend_class, wrap_defaults, wrap_pool
 
-core = load_module("c8v16_attention")
+core = load_module(CORE_MODULE)
 HERE = Path(__file__).resolve().parent
 
 
@@ -65,7 +65,8 @@ class Mode:
 class AdapterTests(unittest.TestCase):
     def setUp(self):
         torch.set_num_threads(1)
-        self.config = core.AttentionConfig(query_block=16, key_block=32)
+        self.config = (core.AttentionConfig(query_block=16, key_block=64, p_method="single_hif4_qdq_before_pv")
+                       if IS_HIF4 else core.AttentionConfig(query_block=16, key_block=32))
         self.attention = C8V16CoreAttention(NS(kv_channels=32), 1, "causal",
                                            kernel=core.attention, precision_config=self.config)
 
@@ -86,7 +87,7 @@ class AdapterTests(unittest.TestCase):
                   enable_mixed_chunk=False, attention_backend=BACKEND_NAME,
                   prefill_attention_backend=BACKEND_NAME, decode_attention_backend=BACKEND_NAME)
         backend = cls(NS(server_args=args, page_size=4))
-        self.assertEqual(events["backend_created"]["core_module"], "c8v16_attention")
+        self.assertEqual(events["backend_created"]["core_module"], CORE_MODULE)
         layer = NS(tp_q_head_num=4, tp_k_head_num=2, tp_v_head_num=2, qk_head_dim=32, v_head_dim=32,
                    scaling=1/math.sqrt(32), is_cross_attention=False, attn_type="decoder", layer_id=0,
                    sliding_window_size=-1, logit_cap=0.0, quant_method=None)
@@ -100,8 +101,8 @@ class AdapterTests(unittest.TestCase):
             forward = backend.forward_extend if mode == "EXTEND" else backend.forward_decode
             outputs.append(forward(q[start:end], k[start:end], v[start:end], layer, batch))
         torch.testing.assert_close(torch.cat(outputs), dense, atol=0, rtol=0)
-        self.assertEqual(events["first_extend"]["core_module"], "c8v16_attention")
-        self.assertEqual(events["first_decode"]["core_module"], "c8v16_attention")
+        self.assertEqual(events["first_extend"]["core_module"], CORE_MODULE)
+        self.assertEqual(events["first_decode"]["core_module"], CORE_MODULE)
         torch.testing.assert_close(pool.values.flatten(0, 1)[slots], v, atol=0, rtol=0)
 
     def test_packed_trainer_forward_backward_and_padding(self):

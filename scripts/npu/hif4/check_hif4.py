@@ -83,10 +83,20 @@ def check(device, upstream):
     weights = torch.tensor([.5, 2., -3.], device=device)
     grad, = torch.autograd.grad((quantize(leaf) * weights).sum(), leaf)
     torch.testing.assert_close(grad, weights, atol=0, rtol=0)
+    # Sweep maximum values through E6M2 midpoints. Adjacent BF16 peaks
+    # can round to the same SF midpoint before the E6M2 tie is resolved.
+    mantissas = 1. + torch.arange(128, dtype=torch.float32) / 128
+    exponents = torch.tensor([-50, -40, -11, -1, 0, 1, 7, 15, 19])
+    peaks = torch.ldexp(mantissas[None, :], exponents[:, None]).reshape(-1, 1)
+    fractions = torch.linspace(-1., .875, 64)
+    sweep = (peaks * fractions).bfloat16().float()
+    torch.testing.assert_close(quantize(sweep.to(device)).cpu(), quantize(sweep), rtol=0, atol=0)
     g = torch.Generator().manual_seed(717)
     inputs = [torch.randn(1, heads, 133, 128, generator=g).bfloat16() for heads in (4, 1, 1)]
     inputs[-1][:, :, 63, ::3] *= 256
     inputs[-1][:, :, 130, ::3] *= 64
+    for operand in (*inputs[:2], inputs[-1].transpose(-1, -2)):
+        torch.testing.assert_close(quantize(operand.to(device)).cpu(), quantize(operand), rtol=0, atol=0)
     cotangent = torch.randn(inputs[0].shape, generator=g).bfloat16()
     cfg = AttentionConfig(p_method=P_METHOD)
     def forward_backward(on):
@@ -112,6 +122,7 @@ def check(device, upstream):
                                        rtol=0, atol=0)
     return dict(device=device, decoded_sha256=expected, count=x.numel(),
                 groups64=x.numel()//64, exact_against_public_reference=True,
+                e6m2_scale_sweep_groups=peaks.numel(), qkv_qdq_exact_against_cpu=True,
                 reference_sha256=UPSTREAM_SHA, signed_and_all_zero_format_checks=True,
                 max_abs_prefix_difference=0., forward_dq_dk_dv_relative_l2=relative_l2,
                 probability_example=toy, p_candidate=P_METHOD)

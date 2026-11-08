@@ -10,8 +10,9 @@ SAMPLING = {
     "stop": None, "stop_token_ids": None, "skip_special_tokens": False,
     "no_stop_trim": True, "spaces_between_special_tokens": False,
 }
+IS_HIF4 = os.environ.get("SLIME_FA_CUBE_FORMAT") == "hif4"
 BACKEND = {
-    "device": "npu", "tp_size": 8, "attention_backend": "hby_c8v16_sim",
+    "device": "npu", "tp_size": 8, "attention_backend": "hby_hif4_c4v16_sim" if IS_HIF4 else "hby_c8v16_sim",
     "sampling_backend": "pytorch", "dtype": "bfloat16", "disable_cuda_graph": True,
 }
 
@@ -45,7 +46,7 @@ def build_protocol(tokenizer_path, eval_data_path, sampling_params, enable_think
         raise ValueError("AIME precision policy or implementation changed since launch")
     math_dir = repository / "slime/rollout/rm_hub"
     identity = {
-        "protocol_version": "aime2024-30-greedy-c8v16-v1",
+        "protocol_version": "aime2024-30-greedy-hif4-c4v16-v1" if IS_HIF4 else "aime2024-30-greedy-c8v16-v1",
         "questions": 30, "dataset_sha256": AIME_SHA, "samples_per_question": 1,
         "sampling_params": sample, "enable_thinking": False, "add_generation_prompt": True,
         "tokenizer_add_special_tokens": False, "tokenizer_sha256": tokens,

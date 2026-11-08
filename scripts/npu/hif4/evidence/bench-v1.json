@@ -1,0 +1,93 @@
+{
+  "decode": [
+    {
+      "batch": 1,
+      "prefix": 1,
+      "different_output_values": 0,
+      "max_abs": 0.0
+    },
+    {
+      "batch": 3,
+      "prefix": 64,
+      "different_output_values": 0,
+      "max_abs": 0.0
+    },
+    {
+      "batch": 3,
+      "prefix": 65,
+      "different_output_values": 0,
+      "max_abs": 0.0
+    },
+    {
+      "batch": 2,
+      "prefix": 128,
+      "different_output_values": 0,
+      "max_abs": 0.0
+    },
+    {
+      "batch": 3,
+      "prefix": 129,
+      "different_output_values": 0,
+      "max_abs": 0.0
+    },
+    {
+      "batch": 3,
+      "prefix": 511,
+      "different_output_values": 0,
+      "max_abs": 0.0,
+      "reference_s": 0.013065199949778616,
+      "optimized_s": 0.00492940004914999
+    },
+    {
+      "batch": 3,
+      "prefix": 1025,
+      "different_output_values": 0,
+      "max_abs": 0.0,
+      "reference_s": 0.023736580042168498,
+      "optimized_s": 0.005898150033317506
+    },
+    {
+      "batch": 3,
+      "prefix": 2048,
+      "different_output_values": 0,
+      "max_abs": 0.0,
+      "reference_s": 0.03872789000160992,
+      "optimized_s": 0.008149580098688602
+    },
+    {
+      "batch": 3,
+      "prefix": 4097,
+      "different_output_values": 0,
+      "max_abs": 0.0,
+      "reference_s": 0.07761409995146096,
+      "optimized_s": 0.012706179986707866
+    },
+    {
+      "batch": 1,
+      "prefix": 8192,
+      "different_output_values": 0,
+      "max_abs": 0.0,
+      "reference_s": 0.13362825999502093,
+      "optimized_s": 0.009708449942991138
+    }
+  ],
+  "training": [
+    {
+      "length": 1024,
+      "fwd_and_bwd_s": 0.6619098199298605,
+      "warmup_s": 0.7892391600180417
+    },
+    {
+      "length": 2048,
+      "fwd_and_bwd_s": 1.703769479994662,
+      "warmup_s": 1.784865580033511
+    },
+    {
+      "length": 4096,
+      "fwd_and_bwd_s": 5.053382710088044,
+      "warmup_s": 5.25396046997048
+    }
+  ],
+  "scope": "single attention layer, synthetic BF16 Q/K/V",
+  "passed": true
+}

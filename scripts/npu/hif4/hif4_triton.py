@@ -6,17 +6,27 @@ import triton.language as tl
 
 
 @triton.jit
+def _bf16_rne(value):
+    # Keep the BF16 conversion visible to the Ascend compiler. A narrowing
+    # cast immediately widened back to FP32 can otherwise disappear at a tie.
+    bits = value.to(tl.int32, bitcast=True)
+    rounded = (bits + 32767 + ((bits >> 16) & 1)) & -65536
+    special = (bits & 0x7f800000) == 0x7f800000
+    return tl.where(special, bits, rounded).to(tl.float32, bitcast=True)
+
+
+@triton.jit
 def _convert(X, Y, INVALID, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     i = pid * BLOCK + tl.arange(0, BLOCK)
     x = tl.load(X + i).to(tl.float32)
     # W16A16 operands carry BF16 values; the trainer replays them in FP32.
-    x = x.to(tl.bfloat16).to(tl.float32)
+    x = _bf16_rne(x)
     mag = tl.abs(x)
     peak4 = tl.max(tl.reshape(mag, (BLOCK // 4, 4)), 1)
     peak8 = tl.max(tl.reshape(peak4, (BLOCK // 8, 2)), 1)
     peak64 = tl.max(tl.reshape(peak8, (BLOCK // 64, 8)), 1)
-    target = (peak64 * 0.142578125).to(tl.bfloat16).to(tl.float32)
+    target = _bf16_rne(peak64 * 0.142578125)
     bits = tl.minimum(tl.maximum(target, 3.552713678800501e-15), 49152.).to(tl.int32, bitcast=True)
     base_bits = (bits + 0xFFFFF + ((bits >> 21) & 1)) & -0x200000
     base = base_bits.to(tl.float32, bitcast=True)
@@ -31,7 +41,7 @@ def _convert(X, Y, INVALID, BLOCK: tl.constexpr):
     inv4 = tl.reshape(tl.broadcast_to(i8[:, None], (BLOCK // 8, 2)), (BLOCK // 4,))
     f8x2 = tl.reshape(tl.broadcast_to(f8[:, None], (BLOCK // 8, 2)), (BLOCK // 4,))
     f4 = tl.where(peak4 * inv4 >= 2. * f8x2, 2., 1.) * f8x2
-    unscale = tl.reshape(tl.broadcast_to((inv4 * (4. / f4))[:, None], (BLOCK // 4, 4)), (BLOCK,))
+    unscale = tl.reshape(tl.broadcast_to((inv4 * tl.where(f4 == 1., 4., tl.where(f4 == 2., 2., 1.)))[:, None], (BLOCK // 4, 4)), (BLOCK,))
     quant = tl.minimum(tl.floor(mag * unscale + .5), 7.)
     scale4 = tl.reshape(tl.broadcast_to(base[:, None], (BLOCK // 64, 16)), (BLOCK // 4,))
     units = tl.reshape(tl.broadcast_to((scale4 * .25 * f4)[:, None], (BLOCK // 4, 4)), (BLOCK,))

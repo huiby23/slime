@@ -8,10 +8,12 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 ADAPTERS = HERE.parent / "c8v16_adapters"
-POLICY_FILE = HERE / "precision-policy.json"
-BACKEND = "hby_c8v16_sim"
+sys.path.insert(0, str(ADAPTERS))
+from c8v16_profile import BACKEND_NAME as BACKEND, CUBE_FORMAT, HIF4_DIR, IS_HIF4, PRECISION
+
+POLICY_FILE = (HIF4_DIR if IS_HIF4 else HERE) / "precision-policy.json"
 SPEC = ["c8v16_megatron_spec", "get_spec"]
-VERSION = "c8v16-mxfp8-bf16-base100-every5"
+VERSION = "c4v16-hif4-base100-every5" if IS_HIF4 else "c8v16-mxfp8-bf16-base100-every5"
 
 # Locate Slime by source identity. Model/data/runs live in a separate workspace.
 REPOSITORY = next((parent for parent in HERE.parents if (parent / "scripts/npu/qwen30b_dapo.py").is_file()), None)
@@ -48,6 +50,7 @@ class AttentionRecipe:
         search_path = [str(REPOSITORY), str(ADAPTERS), str(HERE.parent / "c8v16_attention")]
         search_path.extend(os.environ.get("PYTHONPATH", "").split(os.pathsep))
         return {
+            "SLIME_FA_CUBE_FORMAT": CUBE_FORMAT,
             "HBY_C8V16_POLICY_FILE": str(POLICY_FILE),
             "HBY_C8V16_POLICY_SHA256": self.policy_sha,
             "HBY_C8V16_IMPLEMENTATION_SHA256": self.implementation_sha,
@@ -71,11 +74,12 @@ class AttentionRecipe:
 
     def manifest(self):
         return {
-            "precision": "W16A16C8V16: BF16 backbone, MXFP8 Cube operands, BF16 Vector boundaries with FP32 reductions, FP32 Adam",
+            "precision": f"{PRECISION}: BF16 backbone, {CUBE_FORMAT.upper()} Cube operands, BF16 Vector boundaries with FP32 reductions, FP32 Adam",
             "attention_simulation": {
                 "backend": BACKEND, "trainer_spec": SPEC, "policy": self.policy,
                 "policy_sha256": self.policy_sha, "implementation_sha256": self.implementation_sha,
-                "cube": "QK/PV input QDQ: MXFP8 E4M3FN / E8M0, block32 along contraction",
+                "cube": ("HiF4 Q/K/P/V, S1P2 with E6M2 and 8/4 subgroups, block64 on contraction"
+                         if IS_HIF4 else "QK/PV input QDQ: MXFP8 E4M3FN / E8M0, block32 along contraction"),
                 "vector": "BF16 boundaries; FP32 max/sum and matrix multiplication accumulation",
                 "backbone": "BF16", "kv_cache": "BF16", "backward": "high-precision STE",
             },
@@ -99,10 +103,10 @@ class AttentionRecipe:
         }
         for field, expected in required.items():
             if getattr(args, field, None) != expected:
-                raise ValueError(f"Unexpected resolved C8V16 {field}: {getattr(args, field, None)!r}")
+                raise ValueError(f"Unexpected resolved {PRECISION} {field}: {getattr(args, field, None)!r}")
         for field in ("sglang_quantization", "fp8", "fp4", "custom_rm_path", "load_debug_rollout_data", "save_debug_rollout_data"):
             if getattr(args, field, None):
-                raise ValueError(f"Incompatible with the W16A16C8V16 recipe: {field}")
+                raise ValueError(f"Incompatible with the {PRECISION} recipe: {field}")
         for field in ("main_params_dtype", "exp_avg_dtype", "exp_avg_sq_dtype"):
             if str(getattr(args, field, None)).split(".")[-1] not in {"float32", "fp32"}:
                 raise ValueError(f"Expected FP32 {field}")

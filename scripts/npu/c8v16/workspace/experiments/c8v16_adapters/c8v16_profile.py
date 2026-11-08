@@ -12,7 +12,14 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 CORE_DIR = HERE.parent / "c8v16_attention"
-BACKEND_NAME = "hby_c8v16_sim"
+CUBE_FORMAT = os.environ.get("SLIME_FA_CUBE_FORMAT", "mxfp8")
+if CUBE_FORMAT not in ("mxfp8", "hif4"):
+    raise ValueError(f"Unknown FA Cube format {CUBE_FORMAT!r}")
+IS_HIF4 = CUBE_FORMAT == "hif4"
+BACKEND_NAME = "hby_hif4_c4v16_sim" if IS_HIF4 else "hby_c8v16_sim"
+PRECISION = "W16A16C4V16" if IS_HIF4 else "W16A16C8V16"
+CORE_MODULE = "hif4_attention" if IS_HIF4 else "c8v16_attention"
+HIF4_DIR = HERE.parents[3] / "hif4"
 
 
 def _shared_experiments():
@@ -28,14 +35,17 @@ MODULES = {
     "c8v16_attention": CORE_DIR,
     "device_quant": SHARED / "c4v8_device_core",
     "exact_fp32": SHARED / "c4v8_device_core",
-    "fused_mxfp8": SHARED / "c4v8_fused_qdq",
-    "nvfp4_triton": SHARED / "c4v8_fused_nvfp4",
     "bridge": SHARED / "c4v8_rl_training_bridge",
     "layouts": SHARED / "c4v8_rl_training_bridge",
     "megatron_spec": SHARED / "c4v8_rl_training_bridge",
     "sglang_bridge": SHARED / "c4v8_rollout_bridge",
     "logical_kv": SHARED / "c4v8_rollout_bridge",
 }
+
+if IS_HIF4:
+    MODULES.update({name: HIF4_DIR for name in ("hif4_quant", "hif4_triton", "hif4_attention", "hif4_decode")})
+else:
+    MODULES.update(fused_mxfp8=SHARED / "c4v8_fused_qdq", nvfp4_triton=SHARED / "c4v8_fused_nvfp4")
 
 
 def module_paths():
@@ -85,11 +95,13 @@ def load_profile():
     policy_file = Path(os.environ["HBY_C8V16_POLICY_FILE"])
     policy = json.loads(policy_file.read_text())
     required = {"query_block", "key_block", "causal", "vector", "reduction", "quantize_operands"}
+    if IS_HIF4:
+        required.update(("p_method", "cube_format"))
     if not isinstance(policy, dict) or set(policy) != required:
-        raise ValueError("Incomplete or unknown C8V16 numerical policy fields")
+        raise ValueError("Incomplete or unknown numerical policy fields")
     if (policy["causal"] is not True or policy["quantize_operands"] is not True
             or policy["vector"] != "bf16" or policy["reduction"] != "mixed_fp32_reduction"):
-        raise ValueError("Expected causal MXFP8 Cube and BF16 Vector policy")
+        raise ValueError("Expected causal quantized Cube and BF16 Vector policy")
     policy_sha = _digest(policy)
     implementation_sha = implementation_sha256()
     if os.environ["HBY_C8V16_POLICY_SHA256"] != policy_sha:
@@ -100,9 +112,12 @@ def load_profile():
     # substitute a different implementation under an otherwise valid digest.
     for name in ("exact_fp32", "device_quant"):
         load_module(name)
-    core = load_module("c8v16_attention")
-    if hasattr(core.torch, "npu"):
-        for name in ("nvfp4_triton", "fused_mxfp8"):
+    shared = load_module("c8v16_attention")
+    if IS_HIF4:
+        load_module("hif4_quant")
+    core = load_module(CORE_MODULE)
+    if hasattr(shared.torch, "npu"):
+        for name in (("hif4_triton", "hif4_decode") if IS_HIF4 else ("nvfp4_triton", "fused_mxfp8")):
             load_module(name)
     return Profile(core, core.AttentionConfig(**policy), policy, policy_sha, implementation_sha)
 
