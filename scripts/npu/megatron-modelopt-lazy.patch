@@ -1,0 +1,14 @@
+--- a/megatron/post_training/checkpointing.py
++++ b/megatron/post_training/checkpointing.py
+@@ -6,5 +6,3 @@
+
+-import modelopt.torch.opt as mto
+ import torch.nn as nn
+-from modelopt.torch.opt.plugins import restore_sharded_modelopt_state
+
+@@ -101,2 +99,5 @@
+     """
++    import modelopt.torch.opt as mto
++    from modelopt.torch.opt.plugins import restore_sharded_modelopt_state
++
+     args = get_args()

@@ -11,6 +11,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from slime.backends.sglang_utils.server_control import unregister_worker
 from slime.backends.sglang_utils.sglang_config import ServerGroupConfig
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, add_default_ray_env_vars
+from slime.utils.npu_compat import ray_accelerator_options
 
 logger = logging.getLogger(__name__)
 
@@ -212,9 +213,17 @@ class ServerGroup:
                     "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
                 }.items()
             }
+            # Optional role-local NPU pool policy; training actors keep their
+            # own allocator setting. Apply before this worker imports Torch.
+            if "SLIME_SGLANG_NPU_ALLOC_CONF" in os.environ:
+                env_vars["PYTORCH_NPU_ALLOC_CONF"] = os.environ["SLIME_SGLANG_NPU_ALLOC_CONF"]
+            for key in ("SGLANG_ENABLE_LOGITS_PROCESSER_CHUNK", "SGLANG_LOGITS_PROCESSER_CHUNK_SIZE",
+                        "MAX_COMPILE_CORE_NUMBER"):
+                if key in os.environ:
+                    env_vars[key] = os.environ[key]
             rollout_engine = RolloutRayActor.options(
                 num_cpus=num_cpus,
-                num_gpus=num_gpus,
+                **ray_accelerator_options(num_gpus),
                 scheduling_strategy=scheduling_strategy,
                 runtime_env={
                     "env_vars": add_default_ray_env_vars(env_vars),
@@ -252,7 +261,7 @@ class ServerGroup:
         # even if the actor dies before answering get_url().
         for rank, _engine in rollout_engines:
             address = addr_and_ports[rank]
-            host = address["host"]
+            host = self.sglang_overrides.get("host", address["host"])
             if ":" in host and not host.startswith("["):
                 host = f"[{host}]"
             self.engine_urls[rank - self.rank_offset] = f"http://{host}:{address['port']}"

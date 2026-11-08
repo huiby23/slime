@@ -1,0 +1,48 @@
+{
+  "scope": "local CPU only; no NPU or training job executed",
+  "tests": [
+    {
+      "test": "c4v8_device_core/test_device_core.py",
+      "exit_code": 0,
+      "seconds": 1.4032023329928052,
+      "output_tail": "............\n----------------------------------------------------------------------\nRan 12 tests in 0.609s\n\nOK\n"
+    },
+    {
+      "test": "c4v8_rl_training_bridge/test_bridge.py",
+      "exit_code": 0,
+      "seconds": 1.1149908330044127,
+      "output_tail": "..............\n----------------------------------------------------------------------\nRan 14 tests in 0.618s\n\nOK\n"
+    },
+    {
+      "test": "c4v8_rl_training_bridge/test_eval_deadlines.py",
+      "exit_code": 0,
+      "seconds": 0.34625737500027753,
+      "output_tail": "            [--client-timeout CLIENT_TIMEOUT]\n                              [--request-timeout REQUEST_TIMEOUT]\n                              [--total-timeout-seconds TOTAL_TIMEOUT_SECONDS]\n                              [--validate-artifacts]\ntest_eval_deadlines.py: error: argument --request-timeout: invalid positive_seconds value: '-1'\nusage: test_eval_deadlines.py [-h] --manifest MANIFEST\n                              [--trajectory-dir TRAJECTORY_DIR]\n                              [--resources-released-report RESOURCES_RELEASED_REPORT]\n                              [--base-sha-report BASE_SHA_REPORT]\n                              [--final-sha-report FINAL_SHA_REPORT]\n                              [--server-start-timeout SERVER_START_TIMEOUT]\n                              [--client-timeout CLIENT_TIMEOUT]\n                              [--request-timeout REQUEST_TIMEOUT]\n                              [--total-timeout-seconds TOTAL_TIMEOUT_SECONDS]\n                              [--validate-artifacts]\ntest_eval_deadlines.py: error: argument --request-timeout: invalid positive_seconds value: 'nan'\nusage: test_eval_deadlines.py [-h] --manifest MANIFEST\n                              [--trajectory-dir TRAJECTORY_DIR]\n                              [--resources-released-report RESOURCES_RELEASED_REPORT]\n                              [--base-sha-report BASE_SHA_REPORT]\n                              [--final-sha-report FINAL_SHA_REPORT]\n                              [--server-start-timeout SERVER_START_TIMEOUT]\n                              [--client-timeout CLIENT_TIMEOUT]\n                              [--request-timeout REQUEST_TIMEOUT]\n                              [--total-timeout-seconds TOTAL_TIMEOUT_SECONDS]\n                              [--validate-artifacts]\ntest_eval_deadlines.py: error: argument --request-timeout: invalid positive_seconds value: 'inf'\n.....\n----------------------------------------------------------------------\nRan 7 tests in 0.299s\n\nOK (skipped=2)\n"
+    },
+    {
+      "test": "c4v8_rl_training_bridge/test_eval_support.py",
+      "exit_code": 0,
+      "seconds": 0.059909333001996856,
+      "output_tail": "...\n----------------------------------------------------------------------\nRan 3 tests in 0.009s\n\nOK\n"
+    },
+    {
+      "test": "c4v8_rl_training_bridge/test_pilot_evidence.py",
+      "exit_code": 0,
+      "seconds": 0.4769989170017652,
+      "output_tail": ".....\n----------------------------------------------------------------------\nRan 5 tests in 0.024s\n\nOK\n"
+    },
+    {
+      "test": "c4v8_completion/test_pipeline.py",
+      "exit_code": 0,
+      "seconds": 0.05451049999828683,
+      "output_tail": ".....s...s\n----------------------------------------------------------------------\nRan 10 tests in 0.011s\n\nOK (skipped=2)\n"
+    },
+    {
+      "test": "c4v8_fast_attention/tests/test_fast_custom_cpu.py",
+      "exit_code": 0,
+      "seconds": 2.2419618329950026,
+      "output_tail": "test_actual_custom_functions_inside_packed_gqa_replay (__main__.CustomFunctions.test_actual_custom_functions_inside_packed_gqa_replay) ... ok\ntest_actual_flags_reject_invalid_stage_before_output_acceptance (__main__.CustomFunctions.test_actual_flags_reject_invalid_stage_before_output_acceptance) ... ok\ntest_actual_normalize_forward_and_broadcast_ste (__main__.CustomFunctions.test_actual_normalize_forward_and_broadcast_ste) ... ok\ntest_float32_only_state_api_and_no_higher_order_claim (__main__.CustomFunctions.test_float32_only_state_api_and_no_higher_order_claim) ... ok\ntest_mx_mask_ste_and_noncontiguous_input (__main__.CustomFunctions.test_mx_mask_ste_and_noncontiguous_input) ... ok\ntest_post_actual_custom_forward_and_partial_requires_grad (__main__.CustomFunctions.test_post_actual_custom_forward_and_partial_requires_grad) ... ok\ntest_pre_actual_custom_forward_and_all_ste_inputs (__main__.CustomFunctions.test_pre_actual_custom_forward_and_all_ste_inputs) ... ok\ntest_pre_each_output_and_partial_gradient_path (__main__.CustomFunctions.test_pre_each_output_and_partial_gradient_path) ... ok\ntest_query_tile_recompute_matches_custom_graph_and_saves_only_qkv (__main__.CustomFunctions.test_query_tile_recompute_matches_custom_graph_and_saves_only_qkv) ... ok\ntest_real_attention_body_gqa_offsets_and_gradients (__main__.CustomFunctions.test_real_attention_body_gqa_offsets_and_gradients) ... ok\ntest_score_error_flags_keep_one_scalar_per_tile (__main__.CustomFunctions.test_score_error_flags_keep_one_scalar_per_tile) ... ok\n\n----------------------------------------------------------------------\nRan 11 tests in 1.736s\n\nOK\n"
+    }
+  ],
+  "passed": true
+}

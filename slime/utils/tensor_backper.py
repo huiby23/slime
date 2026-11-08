@@ -9,8 +9,9 @@ _SourceGetter = Callable[[], Iterable[tuple[str, torch.Tensor]]]
 
 
 class TensorBackuper:
-    def __init__(self, source_getter: _SourceGetter):
+    def __init__(self, source_getter: _SourceGetter, *, cpu_backup: bool = True):
         self._source_getter = source_getter
+        self._cpu_backup = cpu_backup
         self._backups: dict[str, dict[str, torch.Tensor]] = defaultdict(dict)
 
     @property
@@ -18,10 +19,19 @@ class TensorBackuper:
         return list(self._backups)
 
     def get(self, tag: str):
+        if not self._cpu_backup:
+            if tag != "actor" or tag not in self._backups:
+                raise ValueError("Live actor weights do not provide historical model snapshots")
+            return dict(self._source_getter())
         return self._backups[tag]
 
     @torch.no_grad()
     def backup(self, tag: str) -> None:
+        if not self._cpu_backup:
+            if tag != "actor":
+                raise ValueError("Live actor weights cannot back up a reference or teacher")
+            self._backups[tag] = {}
+            return
         backup_dict = self._backups[tag]
         for name, param in self._source_getter():
             if name not in backup_dict:
@@ -31,6 +41,10 @@ class TensorBackuper:
 
     @torch.no_grad()
     def restore(self, tag: str) -> None:
+        if not self._cpu_backup:
+            if tag != "actor" or tag not in self._backups:
+                raise ValueError("Live actor weights cannot restore a historical model")
+            return
         backup_dict = self._backups[tag]
         for name, param in self._source_getter():
             assert name in backup_dict

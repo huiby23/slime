@@ -12,6 +12,7 @@ import slime.utils.eval_config
 from slime.observability.logging_utils import configure_logger
 from slime.ray.ray_actor import RayActor
 from slime.utils import accelerator
+from slime.utils.npu_compat import ray_device_ids
 from slime.utils.distributed_utils import init_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
 
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_local_gpu_id():
-    return accelerator.resolve_visible_device_id(ray.get_gpu_ids()[0])
+    return accelerator.resolve_visible_device_id(ray_device_ids()[0])
 
 
 class TrainRayActor(RayActor):

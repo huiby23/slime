@@ -119,6 +119,12 @@ def _stage_async_save_on_cpu():
 
 def save_checkpoint(iteration, model, optimizer, opt_param_scheduler, **kwargs):
     args = get_args()
+    if getattr(args, "streaming_checkpoint_save", False):
+        if args.async_save or args.dist_ckpt_optim_fully_reshardable:
+            raise ValueError("Streaming checkpoint writer requires synchronous fixed-layout optimizer shards")
+        from slime.utils.streaming_checkpoint_writer import install_streaming_checkpoint_writer
+
+        install_streaming_checkpoint_writer()
     stage_on_cpu = args.async_save and args.offload_train and getattr(args, "async_strategy", "mcore") == "mcore"
     with _stage_async_save_on_cpu() if stage_on_cpu else nullcontext():
         _save_checkpoint_megatron(iteration, model, optimizer, opt_param_scheduler, **kwargs)

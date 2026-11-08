@@ -1,0 +1,52 @@
+{
+  "kind": "complete_git_diff_HEAD_binary_snapshot",
+  "server_read_only": true,
+  "application": "Apply each full snapshot only to its clean pinned HEAD; do not additionally apply docker/npu_patch or docker/patch/* or scripts/npu/*.patch.",
+  "repositories": [
+    {
+      "name": "sglang",
+      "head": "dce8b0606c06d3a191a24c7b8cbe8e238ab316c9",
+      "patch_file": "sglang.patch",
+      "patch_sha256": "2852754026cef75d4609e3f857c97fcbd5ceba05a9e576b8270a6fb455a90b51",
+      "patch_bytes": 85754,
+      "diff_stat": " python/pyproject.toml                              |  84 ++++++------\n python/sglang/srt/configs/model_config.py          |   6 +\n python/sglang/srt/disaggregation/decode.py         |   7 +\n python/sglang/srt/disaggregation/mooncake/conn.py  |  13 ++\n python/sglang/srt/disaggregation/prefill.py        |   7 +\n python/sglang/srt/distributed/parallel_state.py    |   5 +-\n python/sglang/srt/entrypoints/engine.py            |  19 +++\n python/sglang/srt/entrypoints/http_server.py       |  16 +++\n .../npu/attention/ascend_backend.py                | 113 ++++------------\n .../npu/graph_runner/npu_graph_runner.py           |  39 +++---\n .../sglang/srt/layers/attention/nsa/nsa_indexer.py |   9 +-\n python/sglang/srt/layers/layernorm.py              |  28 ++--\n python/sglang/srt/layers/logits_processor.py       |   5 -\n .../srt/layers/moe/fused_moe_triton/fused_moe.py   |   6 +-\n .../srt/layers/moe/routed_experts_capturer.py      |  27 +++-\n .../compressed_tensors/compressed_tensors_moe.py   |  51 +++++++-\n python/sglang/srt/layers/rotary_embedding.py       |  14 +-\n python/sglang/srt/layers/sampler.py                |  11 +-\n .../sglang/srt/layers/vocab_parallel_embedding.py  |   4 +-\n python/sglang/srt/managers/io_struct.py            |  13 ++\n python/sglang/srt/managers/schedule_batch.py       |   3 +-\n python/sglang/srt/managers/scheduler.py            |   2 +\n .../managers/scheduler_output_processor_mixin.py   |   3 +-\n .../srt/managers/scheduler_update_weights_mixin.py |  52 ++++++++\n .../srt/managers/tokenizer_communicator_mixin.py   |  20 +++\n python/sglang/srt/managers/tp_worker.py            |   6 +\n python/sglang/srt/mem_cache/memory_pool.py         |   3 +-\n python/sglang/srt/model_executor/model_runner.py   |  60 ++++++++-\n python/sglang/srt/model_loader/loader.py           |  11 +-\n python/sglang/srt/models/deepseek_v2.py            |   6 +-\n python/sglang/srt/models/llama.py                  |  41 +++++-\n python/sglang/srt/models/qwen2.py                  |  12 +-\n python/sglang/srt/models/qwen2_moe.py              |  12 +-\n python/sglang/srt/models/qwen3.py                  |  13 +-\n python/sglang/srt/models/qwen3_moe.py              |  56 ++++++--\n python/sglang/srt/models/qwen3_vl.py               | 142 ++++++++++++++-------\n python/sglang/srt/server_args.py                   |   6 +\n .../speculative/eagle_draft_cuda_graph_runner.py   |   9 +-\n python/sglang/srt/speculative/eagle_info.py        |  25 ++++\n python/sglang/srt/speculative/eagle_worker.py      |   2 +-\n python/sglang/srt/utils/common.py                  |   2 +\n scripts/ci/npu_ci_install_dependency.sh            |   2 +-\n 42 files changed, 677 insertions(+), 288 deletions(-)\n",
+      "untracked_not_ignored": []
+    },
+    {
+      "name": "Megatron-LM",
+      "head": "3714d81d418c9f1bca4594fc35f9e8289f652862",
+      "patch_file": "Megatron-LM.patch",
+      "patch_sha256": "f58590897a3b8f9b6de150ea367a1c5a0ceb5457904d3268fc29016b38245fdb",
+      "patch_bytes": 56433,
+      "diff_stat": " megatron/core/activations.py                       |  6 +-\n .../core/dist_checkpointing/strategies/common.py   |  2 +-\n .../core/dist_checkpointing/strategies/torch.py    | 13 ++--\n megatron/core/extensions/transformer_engine.py     | 71 ++++++++++++++++++\n megatron/core/fusions/fused_bias_dropout.py        |  4 +-\n megatron/core/fusions/fused_bias_geglu.py          | 22 +++---\n megatron/core/fusions/fused_bias_gelu.py           |  4 +-\n megatron/core/fusions/fused_bias_swiglu.py         | 12 ++--\n megatron/core/fusions/fused_cross_entropy.py       |  8 +--\n megatron/core/fusions/fused_mla_yarn_rope_apply.py | 83 +++++++++++++---------\n megatron/core/fusions/fused_pad_routing_map.py     |  2 +-\n .../core/fusions/fused_weighted_squared_relu.py    |  6 +-\n .../common/language_module/language_module.py      | 10 ++-\n megatron/core/models/gpt/gpt_layer_specs.py        | 10 ++-\n megatron/core/models/gpt/gpt_model.py              | 17 +++--\n megatron/core/optimizer/__init__.py                |  1 +\n .../optimizer/cpu_offloading/hybrid_optimizer.py   | 13 +++-\n megatron/core/optimizer/distrib_optimizer.py       |  6 +-\n megatron/core/parallel_state.py                    |  1 +\n .../core/pipeline_parallel/p2p_communication.py    |  8 +--\n megatron/core/ssm/gated_delta_net.py               |  2 +-\n megatron/core/transformer/attention.py             |  2 +-\n megatron/core/transformer/module.py                |  6 +-\n megatron/core/transformer/moe/experts.py           |  4 +-\n megatron/core/transformer/moe/moe_utils.py         |  3 +\n megatron/core/transformer/moe/router.py            |  5 +-\n megatron/core/transformer/moe/token_dispatcher.py  |  2 +-\n .../core/transformer/multi_token_prediction.py     | 69 +++++++++++++++---\n megatron/core/transformer/torch_norm.py            |  2 +-\n megatron/core/transformer/transformer_config.py    |  3 +\n megatron/core/transformer/transformer_layer.py     | 24 +++++++\n megatron/core/transformer/utils.py                 |  4 +-\n megatron/legacy/model/fused_bias_gelu.py           |  4 +-\n megatron/legacy/model/transformer.py               |  4 +-\n megatron/legacy/model/utils.py                     |  4 +-\n megatron/post_training/checkpointing.py            |  5 +-\n megatron/training/arguments.py                     |  9 +++\n megatron/training/tokenizer/tokenizer.py           |  2 +-\n 38 files changed, 339 insertions(+), 114 deletions(-)\n",
+      "untracked_not_ignored": []
+    },
+    {
+      "name": "MindSpeed",
+      "head": "fc63de5c48426dd019c3b3f39e65f5bdf56e4086",
+      "patch_file": "MindSpeed.patch",
+      "patch_sha256": "16ab6e4c35ad7fbd5279343edbc3b6a80f263d903ba49dd32192e638931010ea",
+      "patch_bytes": 4593,
+      "diff_stat": " mindspeed/core/fusions/fused_rope.py                                | 3 ++-\n mindspeed/megatron_adaptor.py                                       | 1 +\n .../attention/dot_product_attention/dot_product_attention.py        | 6 +++++-\n mindspeed/te/pytorch/module/grouped_linear.py                       | 5 ++++-\n mindspeed/te/pytorch/module/layernorm_column_parallel_linear.py     | 4 ++++\n requirements.txt                                                    | 2 +-\n 6 files changed, 17 insertions(+), 4 deletions(-)\n",
+      "untracked_not_ignored": []
+    },
+    {
+      "name": "mbridge",
+      "head": "89eb10887887bc74853f89a4de258c0702932a1c",
+      "patch_file": "mbridge.patch",
+      "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "patch_bytes": 0,
+      "diff_stat": "",
+      "untracked_not_ignored": []
+    },
+    {
+      "name": "Megatron-Bridge",
+      "head": "35b4ebfc486fb15dcc0273ceea804c3606be948a",
+      "patch_file": "Megatron-Bridge.patch",
+      "patch_sha256": "329e5af35a8388c5058a6e9c6217d36c16b6bad250d03e8c1243ef315e597da2",
+      "patch_bytes": 4700,
+      "diff_stat": " src/megatron/bridge/models/conversion/param_mapping.py        |  8 ++++++--\n .../models/qwen_vl/modelling_qwen3_vl/transformer_block.py    | 11 +++++++----\n 2 files changed, 13 insertions(+), 6 deletions(-)\n",
+      "untracked_not_ignored": []
+    }
+  ]
+}

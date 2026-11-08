@@ -106,6 +106,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             return parser
 
         def add_train_arguments(parser):
+            parser.add_argument(
+                "--disable-actor-cpu-backup", action="store_true",
+                help="Use live actor weights for full disk sync; requires no reference, teacher, or train offload.",
+            )
+            parser.add_argument(
+                "--streaming-checkpoint-save", action="store_true",
+                help="Write synchronous torch_dist tensors one at a time without whole-checkpoint CPU staging.",
+            )
             # --train-backend is parsed early in _pre_parse_mode() and merged later.
             reset_arg(parser, "--post-self-attn-layernorm", action="store_true", default=False)
             reset_arg(parser, "--post-mlp-layernorm", action="store_true", default=False)
@@ -2157,6 +2165,24 @@ def slime_validate_args(args):
     if args.use_critic:
         args.offload_train = True
 
+    if args.disable_actor_cpu_backup:
+        if (
+            args.offload_train or args.use_critic or args.kl_coef != 0 or args.use_kl_loss
+            or args.use_opd or args.ref_update_interval is not None
+            or args.update_weight_mode != "full" or args.update_weight_transport != "disk"
+        ):
+            raise ValueError(
+                "--disable-actor-cpu-backup requires a single live actor, no reference/teacher/"
+                "critic/train offload, and full disk weight sync"
+            )
+    if args.streaming_checkpoint_save:
+        if args.async_save or args.ckpt_format != "torch_dist" or args.dist_ckpt_optim_fully_reshardable:
+            raise ValueError(
+                "--streaming-checkpoint-save requires synchronous torch_dist with fixed-layout optimizer shards"
+            )
+        if args.save_debug_rollout_data is not None or args.rollout_data_transport == "straw":
+            raise ValueError("Streaming fixed-layout checkpoints do not support automatic trainer reshard recovery")
+
     if args.offload_train:
         args.disable_grad_buffers_cpu_backup = True
         args.disable_param_buffers_cpu_backup = True
@@ -2181,7 +2207,8 @@ def slime_validate_args(args):
     if args.over_sampling_batch_size is None:
         args.over_sampling_batch_size = args.rollout_batch_size
 
-    assert args.over_sampling_batch_size >= args.rollout_batch_size, (
+    # Generation refills until its target is met, including with smaller positive sub-batches.
+    assert args.over_sampling_batch_size >= 1, (
         f"over_sampling_batch_size {args.over_sampling_batch_size} should be greater than or equal to "
         f"rollout_batch_size {args.rollout_batch_size}"
     )

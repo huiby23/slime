@@ -1,0 +1,419 @@
+{
+  "schema": "c4v8-core-git-inventory-v1",
+  "created_utc": "2026-11-08T17:31:22.372846+00:00",
+  "scope": "Read-only core inventory; no live edits/no NPU/no start/stop actions. Parent owns repository export and task stop.",
+  "layout_note": "Paths are current workspace-relative. Keep experiments sibling layout or adjust ONLY isolated export imports/launch paths. Existing evidence source SHA binds original file content; relocation changes absolute-path implementation identity.",
+  "core_required": [
+    {
+      "path": "hby/experiments/c4v8_device_core/device_attention.py",
+      "bytes": 11822,
+      "sha256": "1799e92e59b5a3257c8ccaecccd52000a4dea0f99980bd0554410499e67d8381",
+      "role": "Imported AttentionConfig, CPU numerical oracle, reference operation graph; portable NPU path is not the approved production backend"
+    },
+    {
+      "path": "hby/experiments/c4v8_device_core/device_quant.py",
+      "bytes": 9857,
+      "sha256": "ad567bac1957b4cc47d8d0af7a28b8c3256f88df08e8f08bc10045b9d5f176ba",
+      "role": "CPU/portable NVFP4 and MXFP8 value/byte oracle; imported by device_attention"
+    },
+    {
+      "path": "hby/experiments/c4v8_device_core/exact_fp32.py",
+      "bytes": 2467,
+      "sha256": "8fc96435be50f0cacfdb95f21426132491afe55dacd7514fe7363ef24c963425",
+      "role": "Exact positive FP32 RNE division used by portable quantizer"
+    },
+    {
+      "path": "hby/experiments/c4v8_fast_attention/fast_attention.py",
+      "bytes": 10622,
+      "sha256": "54548f984082837114a679bf62f2dd2a6b27886a00f29c49acdada410e75e3cb",
+      "role": "Actual training/prefill entry, fused forward custom-autograd Functions, high-precision STE, final-position staged-decode route"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_nvfp4/nvfp4_triton.py",
+      "bytes": 8620,
+      "sha256": "f719691b5b9907391eeb06ce4f5434dbffccc451c3976c5dce085cf31fe9d0b1",
+      "role": "Actual Ascend Triton NVFP4 QDQ, exact RNE scale division, identity STE"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_qdq/forward_api.py",
+      "bytes": 6086,
+      "sha256": "e5a6b9f6e6f2679d041985bccce0e74029a830c5a2c0aa91a0f2ec2c341c1cbf",
+      "role": "Checked MXFP8/pre-P/post-PV/final-normalization APIs"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_qdq/fused_mxfp8.py",
+      "bytes": 11036,
+      "sha256": "e5a89e9ad647eba3928c8f18a70a09de6f6212668d7c5c05080a296021c65531",
+      "role": "Actual MXFP8 value encoding and vector/reduction kernels"
+    },
+    {
+      "path": "hby/experiments/c4v8_staged_decode/staged_decode.py",
+      "bytes": 7479,
+      "sha256": "ea61db1c5346121513d7daa67e645997b5198f966ea278b30b17eac71ed6ffba",
+      "role": "Actual final-position forward-only staged decode wrapper, fixed logical key128 boundaries"
+    },
+    {
+      "path": "hby/experiments/c4v8_staged_decode/staged_kernels.py",
+      "bytes": 4852,
+      "sha256": "92e4c6ebd633d2a60497697d9b6a6b4c80d5c45ea3faef2bc6c032d14461a352",
+      "role": "Actual staged score/max/probability/sum/output state-scan kernels"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_qdq/whole_decode.py",
+      "bytes": 6892,
+      "sha256": "d58d7e879c5eb1422013c5c655daf89156f015f08f5d30454a3b9ace21627a8e",
+      "role": "UNROUTED historical monolithic candidate; retain only because unchanged numerical_profile hashes it and component probe imports it"
+    },
+    {
+      "path": "hby/experiments/c4v8_rl_training_bridge/numerical_profile.py",
+      "bytes": 3717,
+      "sha256": "4a6f6307592971d28b7d0e352d160b9c91b69e47ff739e0df3b8845541e2b7c8",
+      "role": "Stdlib source/toolchain identity, required import paths; hashes all preceding10 source files"
+    }
+  ],
+  "core_count": {
+    "numerical_runtime_imports": 9,
+    "unrouted_hash_binding_only": 1,
+    "source_identity_helper": 1
+  },
+  "cpu_and_bounded_npu_tests": [
+    {
+      "path": "hby/experiments/nvfp4_mxfp8_attention_sim/nvfp4.py",
+      "bytes": 11600,
+      "sha256": "6f5c7c15ef5dd25c1b70795ba43e81f0b88b5234913137f39619a4b1bf9e16a6",
+      "role": "Independent CPU float8-cast-based NVFP4 reference"
+    },
+    {
+      "path": "hby/experiments/nvfp4_mxfp8_attention_sim/mxfp8.py",
+      "bytes": 6382,
+      "sha256": "2bc2d44e788e8e8dc0f090679b2b24e65637770cd5845542fd29260cb7e69de5",
+      "role": "Independent CPU float8-cast-based MXFP8 reference"
+    },
+    {
+      "path": "hby/experiments/nvfp4_mxfp8_attention_sim/attention.py",
+      "bytes": 10271,
+      "sha256": "7b5477750a92ece5dd17dac7faaa4ae3a6f532492604953b11ad3d704b6a21a2",
+      "role": "Original independent CPU FA operation graph"
+    },
+    {
+      "path": "hby/experiments/nvfp4_mxfp8_attention_sim/test_nvfp4.py",
+      "bytes": 13508,
+      "sha256": "8cb25568b594c0dfd1748ad91c6df4b5502318686b9b2c9de578cc4d7b8a8ba9",
+      "role": "CPU E2M1/blockscale/STE/edge tests"
+    },
+    {
+      "path": "hby/experiments/nvfp4_mxfp8_attention_sim/test_mxfp8.py",
+      "bytes": 4929,
+      "sha256": "cedbce7f48b5933f987e135d6203876f115dfd687cb058ca1d30c951bdf09837",
+      "role": "CPU MXFP8 format/scale/tail/mask tests"
+    },
+    {
+      "path": "hby/experiments/nvfp4_mxfp8_attention_sim/test_attention.py",
+      "bytes": 8071,
+      "sha256": "cf2136205f849c04331804c07059a5bfe315116847716631abed04e7fe7142d3",
+      "role": "CPU FA causal/reduction/profile tests"
+    },
+    {
+      "path": "hby/experiments/c4v8_device_core/test_device_core.py",
+      "bytes": 7328,
+      "sha256": "5caf4c4a037f0803a03121eebb0e0f71513ffc5b2b9be3a7610d0cd2413eae86",
+      "role": "CPU byte/value equivalence, positive division exponent range, STE and causal invariants"
+    },
+    {
+      "path": "hby/experiments/c4v8_fast_attention/tests/test_fast_custom_cpu.py",
+      "bytes": 14075,
+      "sha256": "b324c5092e51a9c35a8ce17dc54154b8231a3ae88e8ba64f31d2a2ff80493cea",
+      "role": "Actual custom autograd Functions with injected CPU forward oracle; bridge/layout dependencies supplied by training inventory"
+    },
+    {
+      "path": "hby/experiments/c4v8_fast_attention/tests/run_cpu_review.py",
+      "bytes": 3723,
+      "sha256": "6dd41bd701b244c88651103a405db1397117fac15601650dc292a81c7e5fa681",
+      "role": "CPU test report and exact source binding"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_nvfp4/validate_fused_only.py",
+      "bytes": 4907,
+      "sha256": "77de801c4dbb877eb51448c0b371f07b5744fed42d7c46c97cbae80484a006bf",
+      "role": "Bounded real NPU format/STE/inference/dynamic-row compile-cache test; no portable NPU reference"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_qdq/cpu_oracle.py",
+      "bytes": 5044,
+      "sha256": "48ca396f1c56eec270e0faff4e900f5fecb38ffd56891b551f8016e4f11c6d0d",
+      "role": "CPU pre-P/post-PV oracle used by actual vector validation"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_qdq/decode_cpu_oracle.py",
+      "bytes": 3470,
+      "sha256": "63311c33aee890ecb2e34c474a9451077a9bd9b6df75dfd253c80e379ea96f42",
+      "role": "Validation import dependency for optional unrouted monolithic candidate; not production"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_qdq/test_cpu_oracle.py",
+      "bytes": 5420,
+      "sha256": "1f0e588fa93597815c3f9a69c1dd1a3352f076b4504e4081ac7860af05c2392f",
+      "role": "CPU vector-oracle equivalence tests"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_qdq/validate_npu.py",
+      "bytes": 15255,
+      "sha256": "ef7140ffb471af6e450d518d6e896898d6e6c105f011dea54421c1aca187f1b5",
+      "role": "Bounded component test machinery; use --phase qdq-vector only for accepted component coverage, not decode/all"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_qdq/validate_vector_acceptance.py",
+      "bytes": 3632,
+      "sha256": "20129a159b5963a02849b6aed93c950a67d5673fe730f0217f692c85b55e4e11",
+      "role": "Actual frozen default-vector API acceptance entry"
+    },
+    {
+      "path": "hby/experiments/c4v8_staged_decode/staged_cpu_oracle.py",
+      "bytes": 3256,
+      "sha256": "5ed3781caa41bb2e1d04c56e1eb4b104916b2d6d4c7a85818db59cf4089643e9",
+      "role": "Independent CPU full-sequence/decomposed128-key scheduling oracle"
+    },
+    {
+      "path": "hby/experiments/c4v8_staged_decode/validate_cpu.py",
+      "bytes": 2989,
+      "sha256": "6547a7b2a94453970fb1e1df4d006d8510f5348531caf537052d86ddf33ddd83",
+      "role": "CPU staged schedule versus online reference"
+    },
+    {
+      "path": "hby/experiments/c4v8_staged_decode/validate_npu_extended.py",
+      "bytes": 13297,
+      "sha256": "50d7a32e8cc9f258f4f37a18a9c90367b30784552df2130722dc1bfc6e2e0fbf",
+      "role": "Bounded13-case NPU staged test including batch2/GQA and1024/4096/8192; no model/RL"
+    }
+  ],
+  "compact_local_evidence": [
+    {
+      "path": "hby/experiments/c4v8_fused_nvfp4/evidence/npu-fused-only-v4/report.json",
+      "bytes": 1894,
+      "sha256": "92e98e40ffbc37635f29da5e9b6334d7a83c83a6457f0be3972e1b08d08a4ac6",
+      "role": "Current NVFP4 source: normal/inference output+code+scale parity, STE, dynamic row cache reuse"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_nvfp4/evidence/npu-fused-only-v4/backend-log-audit.json",
+      "bytes": 356,
+      "sha256": "6e86c249c071baf1c6145dd4e2a07c781d9721ce67fc6652203ef1444eb097f2",
+      "role": "Full process log fallback audit for fused-only test"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_nvfp4/evidence/npu-fused-only-v4/exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "role": "Actual fused-only process exit0"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_nvfp4/evidence/npu-fused-only-v4/npu-after-process-exit.txt",
+      "bytes": 4851,
+      "sha256": "37f760b14a627c327a2923f40e3e3348e30e68b90520df3d9dfd9a054d86b7ca",
+      "role": "Actual8-device release snapshot"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_qdq/evidence/default-forward-components-acceptance.json",
+      "bytes": 507,
+      "sha256": "e20e7169a3cd9bbdef469e5c4f67b02731afc29949fb962dbe2c596e5ec82e28",
+      "role": "60 accepted NPU forward-component assertions; not a full training claim"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_qdq/evidence/npu-default-finite-v1/report.json",
+      "bytes": 17533,
+      "sha256": "fd8757b496eddb6fa2608895d8f87ff3944c9f378cfb58a25a4ad65cc6fdf755",
+      "role": "Detailed real60-case numerical report and source versions"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_qdq/logs/npu-default-finite-v1.exit",
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+      "role": "Actual vector component process exit0"
+    },
+    {
+      "path": "hby/experiments/c4v8_fused_qdq/evidence/npu-after-default-finite-v1.txt",
+      "bytes": 4851,
+      "sha256": "03fbc7471330b3105116a65fb6cec42c03e3f918acecbdadbc547e28e735bc8e",
+      "role": "Actual8-device release snapshot"
+    },
+    {
+      "path": "hby/experiments/c4v8_device_core/evidence/fast-stage-attribution-v1/acceptance-rationale.json",
+      "bytes": 52368,
+      "sha256": "587b1af3cce4ea7783bc1a63c546b4b995db0264de8b9a0f8c0c0fd25961e4e9",
+      "role": "Preserves CPU/NPU differences: actual scaled-QK and PV CPU replay explains all nongemm outputs; no false universal bitidentity claim"
+    },
+    {
+      "path": "hby/experiments/c4v8_device_core/evidence/portable-backend-fallback-audit.json",
+      "bytes": 6192,
+      "sha256": "9c6547a22477221e7c04df9a52ace92aa7579dbcce2c165db214fb56b76a5f0b",
+      "role": "Important limitation: earlier portable torch path emitted CPU fallback; only fused backend is approved"
+    },
+    {
+      "path": "hby/experiments/c4v8_query_tiling_probe/evidence/finalcore-postcheck-v1-verdict.json",
+      "bytes": 1914,
+      "sha256": "d0c9f38ed7ca16b1b31214aede70aeec14e4e86f0a955d72172833892fe9201e",
+      "role": "Current fast source54548...: BF16N140/513/1025+FP32N513, output/grad vs predecessor exact on listed fixtures, source/evidence hashes"
+    },
+    {
+      "path": "hby/experiments/c4v8_query_tiling_probe/evidence/query1024-signed-zero-attribution.json",
+      "bytes": 7675,
+      "sha256": "d1ca9026e07fbc127c2eb91b43138f993883047ef6692d582cde2448784e9390",
+      "role": "Preserves querytiling signed-zero and FP32 accumulation-order limits"
+    },
+    {
+      "path": "hby/experiments/c4v8_device_core/evidence/equal-length-batch-npu-v1-verdict.json",
+      "bytes": 4499,
+      "sha256": "f6b6d45c98d30e95b9c439603326f0f1e113c4c019c7b300b3796bd7ed284bd1",
+      "role": "B4H4HK1 vs4B1 exact final outputs on prefixes129/1024/4096; rawFP32 differences separately reported"
+    }
+  ],
+  "additional_compact_real_npu_evidence_remote": [
+    {
+      "remote_directory": "/root/hby/experiments/c4v8-integration-probes/evidence/owned-staged-decode-extended-v1",
+      "include_files": [
+        "result.json",
+        "validation/report.json",
+        "npu-after.json"
+      ],
+      "exclude": "Tensor payloads, per-case duplicated reports, source snapshots, caches and model artifacts"
+    },
+    {
+      "remote_directory": "/root/hby/experiments/c4v8-integration-probes/evidence/owned-staged-long-agreement-v1",
+      "include_files": [
+        "result.json",
+        "comparison/report.json",
+        "npu-after.json"
+      ],
+      "exclude": "Tensor payloads, per-case duplicated reports, source snapshots, caches and model artifacts"
+    },
+    {
+      "remote_directory": "/root/hby/experiments/c4v8-integration-probes/evidence/owned-finalcore-postcheck-v1",
+      "include_files": [
+        "result.json",
+        "validation/report.json",
+        "npu-after.json"
+      ],
+      "exclude": "Tensor payloads, per-case duplicated reports, source snapshots, caches and model artifacts"
+    },
+    {
+      "remote_directory": "/root/hby/experiments/c4v8-integration-probes/evidence/owned-equal-length-batch-npu-v1",
+      "include_files": [
+        "result.json",
+        "validation/report.json",
+        "npu-after.json"
+      ],
+      "exclude": "Tensor payloads, per-case duplicated reports, source snapshots, caches and model artifacts"
+    }
+  ],
+  "integration_dependencies_managed_by_other_inventory": [
+    "c4v8_rl_training_bridge/bridge.py",
+    "c4v8_rl_training_bridge/layouts.py",
+    "Training adapters, actual launcher, explicit policy and schema files selected by the training-agent inventory (not enumerated by this core-only list)",
+    "c4v8_rollout_bridge/logical_kv.py and sglang_bridge.py with same-length grouping already merged; exclude standalone candidate duplication"
+  ],
+  "exclude_globs": [
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/._*",
+    "**/.DS_Store",
+    "**/*.pt",
+    "**/*.pth",
+    "**/*.bin",
+    "**/*.safetensors",
+    "**/*.npz",
+    "**/*.tgz",
+    "**/*.tar*",
+    "**/cache/**",
+    "**/pinned-source/**",
+    "**/candidate_*",
+    "**/draft-*",
+    "**/*.partial*",
+    "**/source-snapshot/**",
+    "**/source-*.py"
+  ],
+  "exclude_directories": [
+    "c4v8_decode_batch_candidate (already merged into actual rollout bridge)",
+    "c4v8_query_tiling_probe old candidate source/patches (only explicit selected JSON evidence retained)",
+    "old npu-v1/v2/v3 portable-format and failed compiler-candidate evidence directories (keep only concise limitation/attribution reports, never delete originals remotely)"
+  ],
+  "important_reproduction_notes": [
+    "whole_decode.py is not executed in current fast_attention. Removing it requires isolated numerical_profile and validation import edits, producing a new implementation identity; never relabel old NPU evidence as validating edited bytes.",
+    "AttentionConfig defaults in generic reference/fast function are diagnostic sizes; formal policy must explicitly set query_block1024,key_block128,causal=True,vector=mxfp8,quantize_operands=True,reduction=mxfp8_tree_reduction.",
+    "Keep HBY_C4V8_ALLOW_UNVALIDATED_FUSION=1 explicit in approved launcher; old candidate naming and conservative metadata are source history, not fresh proof. Actual source-matched launch evidence determines accepted scope.",
+    "NPU tests require explicit exclusive lease and all8-idle gate; user currently requests stop after commit. No inventory command authorizes test/training restart.",
+    "Use torch_npu initialization BEFORE first CPU autograd in mixed CPU/NPU probes, jit_compile=False, matmul.allow_hf32=False. Use existing activate-slime and pinned Triton-Ascend3.2, no global install.",
+    "Historical finalcore postcheck script requires predecessor source snapshot; not included as a standalone runnable test. Its compact report and source hashes remain evidence. Never silently replace missing predecessor with current source.",
+    "CPU/NPU FP32 GEMM and score scaling can differ at quantization thresholds; exact same-input QDQ bytes and replay attribution were checked. Do not claim all attention outputs or all STE gradients are universally bitidentical across backends."
+  ],
+  "quantization_spec": {
+    "label": "BF16 backbone + attention C4V8 forward QDQ, high-precision STE backward; branch shorthand W16A16C4V8",
+    "W_A": "Weights and model backbone remain BF16. No W4 or A8 global model quantization.",
+    "C_meaning": "Attention Cube GEMM operands Q/K/V and unnormalized within-tile P use NVFP4 QDQ. QK and PV are executed as FP32 dequantized reference matmuls, not native4-bit kernels.",
+    "C_payload": {
+      "format": "E2M1",
+      "magnitudes": [
+        0,
+        0.5,
+        1,
+        1.5,
+        2,
+        3,
+        4,
+        6
+      ],
+      "rounding": "nearest ties to even",
+      "overflow": "saturate magnitude to6",
+      "signed_zero": "preserved"
+    },
+    "C_scales": {
+      "block": "16 consecutive last-axis elements, each row separately; zero tail padding",
+      "block_scale": "E4M3FN RNE, maximum448",
+      "upper_scale": "One FP32 scale per full logical last-axis row, independently per token/head; not global tensor scale",
+      "exact_order": "upper_encode=min(RNE_F32_div(2688,amax),FLT_MAX), zero-row upper_encode=1; upper_decode=RNE_F32_div(1,upper_encode); scale=E4M3_RNE(min(block_amax*(upper_encode*RNE_F32(1/6)),448)); payload=E2M1_RNE(clamp(x*min(RNE_F32_div(1,scale*upper_decode),FLT_MAX),-6,6)); reconstruction=(payload*scale)*upper_decode",
+      "scope_examples": "Q/K/V group feature axis; P group key axis within original128-key tile; V not transposed into a different nativeGEMM grouping",
+      "no_features": [
+        "stochastic rounding",
+        "random Hadamard transform",
+        "4over6 search",
+        "HiF4 proprietary rule"
+      ]
+    },
+    "V_meaning": "Attention Vector-boundary MXFP8 QDQ includes max/sum reductions and running-state updates; not only final probability/output casting.",
+    "V_format": {
+      "payload": "E4M3FN RNE saturated to448",
+      "block": "32 consecutive last-axis values within one query/head row",
+      "scale": "E8M0, s=2^clamp(ceil(log2(amax/448)),-127,127), allzero block s=1; exact bit construction/threshold comparison, not an approximate pow/log kernel",
+      "mask": "Causal -inf is out-of-band, excluded from amax and restored; mask gradient zero",
+      "scalar_states": "Each row scalar is its own one-element block padded with zeros, not grouped across query tokens"
+    },
+    "V_reduction": "Adjacent binary max/sum tree, odd level identity-padding (-inf/0); initial input and EACH level requantized toMXFP8. Running max merge, denominator multiply and add separately requantized. This is an experiment-defined operation order; MXFP8 format alone does not prescribe it.",
+    "online_softmax": "S=MX(Q4@K4^T/sqrt(D)) after causal masking; m=MX(max(m_old,MX_tree_max(S))); alpha=MX(exp(MX(m_old-m))); P8=MX(exp(MX(S-m))); L=MX(MX(L_old*alpha)+MX_tree_sum(P8)); O=MX(MX(O_old*alpha)+MX(NVFP4(P8)@V4)); final=MX(exact signed FP32 RNE(O/L)), then cast output to input BF16/FP32.",
+    "P8_P4_distinction": "P8 supplies denominator tree; NVFP4(P8) supplies PV only. Do not substitute P4 in denominator.",
+    "high_precision_exceptions": [
+      "FP32 underlying elementary operations before boundary QDQ, including exp",
+      "FP32 dequantized GEMM accumulation and ordinary score scaling",
+      "FP32 upper-scale estimation/exact division and structural masks/indices",
+      "High-precision identity-STE/autograd backward; not quantized backward or nativeNVFP4 training"
+    ],
+    "execution_policy": {
+      "query_block": 1024,
+      "key_block": 128,
+      "head_dim": 128,
+      "causal": true,
+      "GQA": "repeat KV heads logically; same grouping perhead",
+      "decode": "Final-position one-query inference with no requires_grad uses staged decode; exact logical128-key quantization boundaries retained; same-length requests batched, mixed lengths remain separate",
+      "backward": "Query-tile recomputation stores original Q/K/V; FP32 replay/accumulation then inputdtype cast; Post closed-form identity-STE Jacobian; no higher-order gradient claim"
+    },
+    "not_claimed": [
+      "native Blackwell NVFP4/MXFP8 execution",
+      "packed low-bit model/checkpoint storage",
+      "all Vector elementary/accumulator arithmetic physically8-bit",
+      "low-bit backward",
+      "HiF4 equivalence",
+      "finished100updates or improved accuracy from these kernel tests"
+    ]
+  },
+  "core_required_total_bytes": 83450,
+  "cpu_and_bounded_npu_tests_total_bytes": 137157,
+  "compact_local_evidence_total_bytes": 102644,
+  "exclude_globs_exception": "Retain the explicit hash-binding-only whole_decode.py; broad candidate exclusions must not remove this individually allowlisted file."
+}

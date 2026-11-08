@@ -19,6 +19,7 @@ from slime.observability.profile_utils import TrainProfiler
 from slime.observability.timer import Timer, inverse_timer, timer, with_defer
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import accelerator
+from slime.utils.npu_compat import repatch_megatron_npu
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory, reset_cuda_stack_size
@@ -85,6 +86,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 logger.info("Default WORLD process-group destruction is disabled")
 
         init(args)
+        repatch_megatron_npu(args)
 
         if is_megatron_main_rank():
             init_tracking(args, primary=False, role=role)
@@ -103,6 +105,10 @@ class MegatronTrainRayActor(TrainRayActor):
         self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id = initialize_model_and_optimizer(
             args, role
         )
+
+        from slime.utils.npu_optimizer_preallocation import maybe_preallocate_npu_adam
+
+        maybe_preallocate_npu_adam(self, args, role)
 
         vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size() or 1
         if vpp_size > 1:
@@ -127,6 +133,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         self.weights_backuper = TensorBackuper(
             source_getter=lambda: named_params_and_buffers(self.args, self.model),
+            cpu_backup=not getattr(args, "disable_actor_cpu_backup", False),
         )
         self._active_model_tag: str | None = "actor"
         self.weights_backuper.backup("actor")

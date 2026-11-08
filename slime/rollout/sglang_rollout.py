@@ -1,4 +1,5 @@
 import asyncio
+import os
 import copy
 import inspect
 import json
@@ -577,12 +578,25 @@ async def generate_rollout_async(
                 if args.rollout_data_transport == "straw" and not keep_all_samples:
                     group = await publish_rollout_async(group, args, rollout_id, group=True, controller=controller)
                 data.append(group)
+                backup_directory = os.environ.get("SLIME_NPU_PRE_ABORT_ROLLOUT_BACKUP_DIR")
+                if backup_directory and args.rollout_data_transport == "object-store":
+                    from slime.observability.rollout_data_utils import save_incremental_accepted_rollout_backup
+
+                    save_incremental_accepted_rollout_backup(
+                        backup_directory, data, rollout_id=rollout_id, args=args
+                    )
                 pbar.update(args.n_samples_per_prompt)
 
     pbar.close()
     logger.info(
         f"Finish rollout: {[str(sample.prompt) + sample.response]}, label: {str(sample.label)[:100]}, reward: {sample.reward}",
     )
+
+    backup_directory = os.environ.get("SLIME_NPU_PRE_ABORT_ROLLOUT_BACKUP_DIR")
+    if backup_directory:
+        from slime.observability.rollout_data_utils import save_pre_abort_rollout_backup
+
+        save_pre_abort_rollout_backup(backup_directory, data, rollout_id=rollout_id, args=args)
 
     # there are still some unfinished requests, abort them
     aborted_samples = await abort(args, rollout_id)

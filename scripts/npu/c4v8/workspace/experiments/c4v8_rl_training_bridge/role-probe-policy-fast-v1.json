@@ -1,0 +1,8 @@
+{
+  "query_block": 64,
+  "key_block": 128,
+  "vector": "mxfp8",
+  "quantize_operands": true,
+  "causal": true,
+  "reduction": "mxfp8_tree_reduction"
+}

@@ -1,0 +1,99 @@
+diff --git a/mindspeed/core/fusions/fused_rope.py b/mindspeed/core/fusions/fused_rope.py
+index a6f02e0..70f7cb0 100644
+--- a/mindspeed/core/fusions/fused_rope.py
++++ b/mindspeed/core/fusions/fused_rope.py
+@@ -126,5 +126,6 @@ def apply_rotary_pos_emb(
+         freqs,
+         rotary_interleaved=config.rotary_interleaved,
+         multi_latent_attention=config.multi_latent_attention,
+-        mscale=mscale
++        mscale=mscale,
++        cp_group=cp_group
+     )
+diff --git a/mindspeed/megatron_adaptor.py b/mindspeed/megatron_adaptor.py
+index f14b231..4615590 100644
+--- a/mindspeed/megatron_adaptor.py
++++ b/mindspeed/megatron_adaptor.py
+@@ -57,6 +57,7 @@ def delete_lock_file():
+ def repatch(args):
+     MindSpeedFeaturesManager.remove_patches()
+     full_args = get_full_args()
++    args = vars(args)
+     for k, v in args.items():
+         setattr(full_args, k, v)
+     MindSpeedFeaturesManager.apply_features_pre_patches(full_args)
+diff --git a/mindspeed/te/pytorch/attention/dot_product_attention/dot_product_attention.py b/mindspeed/te/pytorch/attention/dot_product_attention/dot_product_attention.py
+index ac4eabe..78c5866 100644
+--- a/mindspeed/te/pytorch/attention/dot_product_attention/dot_product_attention.py
++++ b/mindspeed/te/pytorch/attention/dot_product_attention/dot_product_attention.py
+@@ -330,6 +330,8 @@ class DotProductAttention(torch.nn.Module):
+         inference_params: Any = None,
+         pad_between_seqs: Optional[bool] = None,
+         fp8_output: Optional[bool] = False,
++        local_cp_size=None,
++        cp_group=None,
+     ) -> torch.Tensor:
+         """
+         Dot Product Attention Layer.
+@@ -659,7 +661,9 @@ class MindSpeedTEDotProductAttention(DotProductAttention):
+         ) and not getattr(self.config, 'is_llava', False):
+             self.config.sparse_mode = 2
+             attention_mask = get_attention_mask(self.config)
+-
++        attention_mask = torch.triu(
++            torch.ones((2048, 2048),
++                       device=query.device, dtype=torch.bool), diagonal=1)
+         packed_seq_kwargs = (
+             {key: getattr(packed_seq_params, key) for key in self.kept_packed_seq_params}
+             if packed_seq_params is not None
+diff --git a/mindspeed/te/pytorch/module/grouped_linear.py b/mindspeed/te/pytorch/module/grouped_linear.py
+index d421f79..8edc01b 100644
+--- a/mindspeed/te/pytorch/module/grouped_linear.py
++++ b/mindspeed/te/pytorch/module/grouped_linear.py
+@@ -6,7 +6,7 @@ import torch
+ import torch_npu
+ from torch.nn import Parameter
+ 
+-from megatron.core.tensor_parallel.layers import _initialize_affine_weight_cpu, _initialize_affine_weight_gpu
++from megatron.core.tensor_parallel.layers import _initialize_affine_weight_cpu, _initialize_affine_weight_gpu, set_tensor_model_parallel_attributes
+ from megatron.core.transformer.utils import sharded_state_dict_default
+ from megatron.core import parallel_state
+ from megatron.core.transformer.mlp import apply_swiglu_sharded_factory
+@@ -123,6 +123,9 @@ class MindSpeedTEGroupedLinear(torch.nn.Module):
+                                                   world_size=tp_size)
+                 else:
+                     _initialize_affine_weight_gpu(expert_weight, init_method, partition_dim=self.partition_dim, stride=1, is_expert=is_expert)
++            else:
++                # Preserve expert TP identity for loading and global grad-norm accounting.
++                set_tensor_model_parallel_attributes(expert_weight, True, self.partition_dim, 1)
+             self.total_weight.append(expert_weight)
+ 
+         for param in self.parameters():
+diff --git a/mindspeed/te/pytorch/module/layernorm_column_parallel_linear.py b/mindspeed/te/pytorch/module/layernorm_column_parallel_linear.py
+index d04f8a6..540ae2a 100644
+--- a/mindspeed/te/pytorch/module/layernorm_column_parallel_linear.py
++++ b/mindspeed/te/pytorch/module/layernorm_column_parallel_linear.py
+@@ -158,6 +158,10 @@ class MindSpeedTELayerNormColumnParallelLinear(torch.nn.Module):
+                     is_expert=self.is_expert,
+                 )
+ 
++        if not config.perform_initialization:
++            # HF loading still needs TP sharding metadata when random init is skipped.
++            set_tensor_model_parallel_attributes(self.weight, True, 0, 1)
++
+         setattr(self.weight, 'allreduce', not (self.is_expert and self.expert_parallel))
+ 
+         if bias:
+diff --git a/requirements.txt b/requirements.txt
+index 5b37065..07d1548 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,7 +1,7 @@
+ pybind11
+ ninja
+ wheel
+-numpy<=1.26.0
++numpy>=1.26.0,<1.27
+ six
+ regex
+ decorator

@@ -332,7 +332,9 @@ def setup_model_and_optimizer(
             model_chunks=model,
             use_gloo_process_groups=args.enable_gloo_process_groups,
         )
-    if config.use_precision_aware_optimizer:
+    # HybridDeviceOptimizer owns its FP32 master state and MCore checkpointing;
+    # the TE remainder patch only applies to a genuine TE FusedAdam optimizer.
+    if config.use_precision_aware_optimizer and not config.optimizer_cpu_offload:
         from .transformer_engine import patch_precision_aware_optimizer_checkpointing
 
         patch_precision_aware_optimizer_checkpointing(optimizer)
@@ -541,7 +543,9 @@ def train_one_step(
     num_microbatches: int,
     step_global_batch_size: int,
     microbatch_pbar=None,
-) -> tuple[dict[str, float], float]:
+    *,
+    return_step_success: bool = False,
+) -> tuple[dict[str, float], float] | tuple[dict[str, float], float, bool]:
     """Execute a single pipeline-parallel training step.
 
     Runs forward/backward over ``num_microbatches``, applies optimizer step and
@@ -700,6 +704,7 @@ def train_one_step(
 
         check_mtp_only_grad(model, step_id)
 
+    update_successful = False
     if valid_step:
         # Update parameters.
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
@@ -725,8 +730,10 @@ def train_one_step(
             cp_size=mpu.get_context_parallel_world_size(),
             dp_with_cp_group=mpu.get_data_parallel_group(with_context_parallel=True),
         )
-        return loss_reduced, grad_norm
-    return {}, grad_norm
+        result = (loss_reduced, grad_norm)
+    else:
+        result = ({}, grad_norm)
+    return (*result, bool(update_successful)) if return_step_success else result
 
 
 def should_disable_forward_pre_hook(args: Namespace) -> bool:
@@ -852,11 +859,15 @@ def train(
         disable=_disable_tqdm_for_non_main_rank(),
     )
 
+    save_optimizer_steps = (
+        bool(getattr(args, "optimizer_step_hf_save_interval", 0))
+        and getattr(model[0], "role", "actor") == "actor"
+    )
     # Run training iterations till done.
     for step_id in range(num_steps_per_rollout):
 
         # Run training step.
-        loss_dict, grad_norm = train_one_step(
+        step_result = train_one_step(
             args,
             rollout_id,
             step_id,
@@ -867,7 +878,9 @@ def train(
             num_microbatches[step_id],
             global_batch_sizes[step_id],
             microbatch_pbar=microbatch_pbar,
+            return_step_success=save_optimizer_steps,
         )
+        loss_dict, grad_norm = step_result[:2]
 
         if step_id == 0:
             # Enable forward pre-hook after training step has successfully run. All subsequent
@@ -972,6 +985,15 @@ def train(
                     rel_tol=0.01,
                     abs_tol=0.01,
                 ), f"grad norm mismatch: {grad_norm} != {expected_grad_norm}"
+        if save_optimizer_steps:
+            from .optimizer_step_hf_checkpoint import after_optimizer_step
+
+            after_optimizer_step(
+                args, model, rollout_id=rollout_id, step_id=step_id,
+                successful=step_result[2], grad_norm=grad_norm,
+                disable_pre_hook=(lambda: disable_forward_pre_hook(model)) if pre_hook_enabled else None,
+                enable_pre_hook=(lambda: enable_forward_pre_hook(model)) if pre_hook_enabled else None,
+            )
     microbatch_pbar.close()
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:

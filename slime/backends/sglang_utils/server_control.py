@@ -185,11 +185,45 @@ async def _abort_server_once(url: str, request_timeout: float) -> None:
     )
 
 
+def _validate_load_schema(load: Any) -> None:
+    records = load.get("loads") if isinstance(load, dict) and "loads" in load else load
+    records = records if isinstance(records, list) else [records]
+    keys = ("num_reqs", "num_total_reqs", "total_reqs", "num_running_reqs", "total_running_reqs")
+    if not records or any(
+        not isinstance(record, dict)
+        or not any(type(record.get(key)) is int and record[key] >= 0 for key in keys)
+        for record in records
+    ):
+        raise RuntimeError("Unrecognized SGLang load schema; idle is not confirmed")
+
+
 async def _get_server_load(url: str, request_timeout: float) -> Any:
-    return await asyncio.wait_for(
-        get(f"{url}/v1/loads?include=core,disagg,queues", timeout=request_timeout),
-        timeout=request_timeout,
-    )
+    async def fetch():
+        try:
+            load = await get(f"{url}/v1/loads?include=core,disagg,queues", timeout=request_timeout)
+            _validate_load_schema(load)
+            return load
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code not in (404, 405):
+                raise
+        # Older SGLang exposes core queues via /get_load. It cannot prove
+        # disaggregated transfer queues idle, so only use it for regular mode.
+        info = await get(f"{url}/server_info", timeout=request_timeout)
+        if not isinstance(info, dict) or info.get("disaggregation_mode", "unknown") != "null":
+            raise RuntimeError("Legacy /get_load fallback requires confirmed regular SGLang mode")
+        load = await get(f"{url}/get_load", timeout=request_timeout)
+        records = load if isinstance(load, list) else [load]
+        if not records or any(
+            not isinstance(record, dict)
+            or any(type(record.get(key)) is not int or record[key] < 0
+                   for key in ("num_reqs", "num_waiting_reqs"))
+            for record in records
+        ):
+            raise RuntimeError("Unrecognized legacy SGLang load schema; idle is not confirmed")
+        return load
+
+    # One deadline covers both capability detection and the fallback requests.
+    return await asyncio.wait_for(fetch(), timeout=request_timeout)
 
 
 async def abort_server_until_idle(

@@ -1,0 +1,20 @@
+{
+  "included": false,
+  "note": "External prepared inputs; hashes bind the original experiment. Names alone do not establish identical data. Cleaning/conversion pipeline is not part of this source archive.",
+  "inputs": [
+    {
+      "path": "data/dapo-math-17k/train.jsonl",
+      "dataset": "DAPO-Math-17k",
+      "rows": 17182,
+      "bytes": 12703541,
+      "sha256": "0e622b86c512a35e27d2ba815a2506fcb5d64bc8060d8ef84bee2dd43a48e90a"
+    },
+    {
+      "path": "data/aime-2024/eval.jsonl",
+      "dataset": "AIME2024",
+      "rows": 30,
+      "bytes": 24479,
+      "sha256": "76a1ecaab458f041f89f43fd98f882ec69c4d16b60bb14d38c003daf22e0d36a"
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+# Preserve exact upstream diff bytes and their recorded SHA-256.
+*.patch -whitespace

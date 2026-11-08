@@ -3,8 +3,10 @@ import logging
 import torch
 
 from slime.utils import accelerator
+from slime.utils.npu_compat import bootstrap_megatron_npu
 
 accelerator.initialize_accelerator()
+bootstrap_megatron_npu()
 
 try:
     import deep_ep

@@ -18,6 +18,7 @@ from megatron.core.transformer.spec_utils import import_module
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.training.arguments import core_transformer_config_from_args
 
+from slime.utils import accelerator
 from slime.utils.misc import load_function
 
 _INDEXER_DIRECT_SUBMODULE_NAMES = frozenset(
@@ -311,7 +312,7 @@ def get_model_provider_func(args, role="actor"):
     from .memory import configure_buffer_allocation
 
     configure_buffer_allocation(args)
-    if args.transformer_impl == "transformer_engine":
+    if args.transformer_impl == "transformer_engine" and accelerator.device_type() != "npu":
         from .transformer_engine import install_transformer_engine_extensions
 
         install_transformer_engine_extensions()

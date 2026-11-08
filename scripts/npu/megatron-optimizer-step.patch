@@ -1,0 +1,7 @@
+--- a/megatron/core/optimizer/distrib_optimizer.py
++++ b/megatron/core/optimizer/distrib_optimizer.py
+@@ -655,3 +655,3 @@
+                     [
+-                        g["step"]
++                        g["step"].item() if isinstance(g["step"], torch.Tensor) else g["step"]
+                         for g in inner_state_dict["param_groups"]

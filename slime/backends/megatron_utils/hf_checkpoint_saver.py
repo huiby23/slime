@@ -103,8 +103,10 @@ def save_hf_model_to_path(
     writer = _SafetensorShardWriter(path, enabled=is_writer_rank)
     pending_write = None
 
-    for chunk_idx, hf_named_tensors in enumerate(
-        hf_weight_iterator.get_hf_weight_chunks(
+    # enumerate caches its previous yielded list until after next(generator).
+    # A direct loop lets the producer release that GPU block before building the next.
+    chunk_idx = -1
+    for hf_named_tensors in hf_weight_iterator.get_hf_weight_chunks(
             megatron_local_weights,
             progress_desc=progress_desc,
             # Megatron-to-HF conversion is stateful for some parameters.  For
@@ -114,8 +116,8 @@ def save_hf_model_to_path(
             # cross chunk boundaries.  Writers still only persist their
             # modulo-assigned shards below; non-writer ranks skip conversion.
             should_convert_chunk=lambda _idx: is_writer_rank,
-        )
     ):
+        chunk_idx += 1
         if is_writer_rank and chunk_idx % num_save_nodes == save_node_rank:
             pending_write = (chunk_idx, hf_named_tensors)
             hf_named_tensors = None

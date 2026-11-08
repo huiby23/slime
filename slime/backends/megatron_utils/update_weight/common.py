@@ -103,6 +103,29 @@ def all_gather_params_async(
             else:
                 tp_group = mpu.get_tensor_model_parallel_group()
 
+            if (
+                param.device.type == "npu"
+                and param.ndim > 0
+                and param.is_contiguous()
+                and param.partition_dim == 0
+                and param.partition_stride == 1
+                and info.attrs.get("partition_sections") is None
+                and "linear_fc1" not in info.name
+                and "linear_fc2.weight" not in info.name
+            ):
+                # Axis-zero concatenation already matches a contiguous gather
+                # output. Avoid list staging plus a second full tensor from cat,
+                # which can exceed HBM for the vocabulary embedding/head.
+                gathered = torch.empty(
+                    (tp_size * param.shape[0], *param.shape[1:]),
+                    dtype=param.dtype,
+                    device=param.device,
+                )
+                handle = dist.all_gather_into_tensor(gathered, param.data, group=tp_group, async_op=True)
+                gather_tasks.append((info, gathered, handle, None, 0))
+                handles.append(handle)
+                continue
+
             param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
             handle = dist.all_gather(param_partitions, param.data, group=tp_group, async_op=True)
             gather_tasks.append((info, None, handle, param_partitions, param.partition_dim))
@@ -116,8 +139,8 @@ def all_gather_params_async(
     # Phase 3: Process all results after all communications are done
     gathered_params = []
     for info, direct_param, handle, param_partitions, partition_dim in gather_tasks:
-        if handle is None:
-            # No all_gather needed
+        if handle is None or param_partitions is None:
+            # No gather, or an already contiguous axis-zero gather output.
             param = direct_param
         else:
             assert partition_dim is not None, "partition_stride != 1 is not supported"

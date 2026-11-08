@@ -1,0 +1,16 @@
+{
+  "python": "3.11.18 (main, Oct 26 2026, 11:40:17) [GCC 15.3.0]",
+  "packages": {
+    "torch": "2.8.0+cpu",
+    "torch-npu": "2.8.0.post2",
+    "triton-ascend": "3.2.0",
+    "sglang": "0.1.dev1+gdce8b06.d20261104",
+    "transformers": "4.57.1",
+    "ray": "2.60.0",
+    "numpy": "1.26.4",
+    "safetensors": "0.8.0",
+    "datasets": "3.6.0",
+    "megatron-core": "0.16.0rc0",
+    "mindspeed": "0.14.1"
+  }
+}

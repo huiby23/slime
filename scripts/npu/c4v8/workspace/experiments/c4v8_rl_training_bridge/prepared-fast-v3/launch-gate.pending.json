@@ -1,0 +1,10 @@
+{
+  "status": "pending",
+  "gate_contract_version": 2,
+  "policy_sha256": null,
+  "implementation_sha256": null,
+  "source_sha256": {},
+  "checks": {},
+  "whole_model_logprob_agreement": "unknown",
+  "note": "Populate only from successful real validation evidence; this is not an approval shortcut."
+}

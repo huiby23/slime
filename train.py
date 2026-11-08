@@ -12,10 +12,23 @@ from slime.utils.misc import should_run_periodic_action
 
 def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
     release_train = args.release_train
+    # Disk publication restores serving weights after the HF write has completed.
+    disk_full_weight_update = (
+        args.update_weight_mode == "full" and args.update_weight_transport == "disk"
+    )
 
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
+    # Opt-in audit context counts successful optimizer updates, not rollout IDs.
+    completed_optimizer_steps = getattr(args, "validation_optimizer_step_offset", None)
 
-    if args.offload_rollout and not release_train:
+    def evaluate(rollout_id):
+        if completed_optimizer_steps is None:
+            return ray.get(rollout_manager.eval.remote(rollout_id))
+        return ray.get(rollout_manager.eval.remote(
+            rollout_id, completed_optimizer_steps=completed_optimizer_steps
+        ))
+
+    if args.offload_rollout and not release_train and not disk_full_weight_update:
         ray.get(rollout_manager.onload_weights.remote())
 
     # Always push actor weights to rollout once weights are loaded.
@@ -32,7 +45,7 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
 
     # special case for eval-only
     if args.num_rollout == 0 and args.eval_interval is not None:
-        ray.get(rollout_manager.eval.remote(rollout_id=0))
+        evaluate(0)
 
     def offload_train(actor_trains_this_step):
         # Each model auto-offloads after train() when offload_train is set,
@@ -46,7 +59,7 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
     # train loop.
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
         if args.eval_interval is not None and rollout_id == 0 and not args.skip_eval_before_train:
-            ray.get(rollout_manager.eval.remote(rollout_id))
+            evaluate(rollout_id)
 
         rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
 
@@ -66,6 +79,9 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
+        if completed_optimizer_steps is not None and actor_trains:
+            completed_optimizer_steps += args.num_steps_per_rollout
+
         # Runtime completion releases queue capacity, without claiming that the
         # model/optimizer or this data progress have a durable joint checkpoint.
         ray.get(rollout_manager.training_completed.remote(rollout_id))
@@ -83,7 +99,7 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
             )
 
         offload_train(actor_trains)
-        if args.offload_rollout and not release_train:
+        if args.offload_rollout and not release_train and not disk_full_weight_update:
             ray.get(rollout_manager.onload_weights.remote())
         was_paused = ray.get(rollout_manager.pause_rollout_admission.remote())
         actor_model.update_weights()
@@ -96,7 +112,7 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
             ray.get(rollout_manager.onload_kv.remote())
 
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
-            ray.get(rollout_manager.eval.remote(rollout_id))
+            evaluate(rollout_id)
 
 
 def main(args, restore_plan):

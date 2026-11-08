@@ -1,0 +1,11 @@
+#!/bin/bash
+set -euo pipefail
+# Dedicated Slime server executable. It does not change the trainer's Python,
+# allocator, CANN worker limit, or the existing rollout/offload lifecycle.
+bridge_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+python_path=${HBY_C4V8_REAL_PYTHON:-/root/hby/envs/slime/bin/python}
+export PYTHONPATH="${bridge_dir}${PYTHONPATH:+:${PYTHONPATH}}"
+if [[ $# -eq 2 && "$1" == '-m' && "$2" == 'slime.backends.sglang_utils.runtime' ]]; then
+    exec "$python_path" -m c4v8_runtime
+fi
+exec "$python_path" "$@"

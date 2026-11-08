@@ -389,7 +389,11 @@ class RolloutManager:
             self.recovery.remember_converted(rollout_id, data, self.batch_builder.batch_id)
         return self.batch_builder.split_by_dp(data)
 
-    def eval(self, rollout_id):
+    def eval(self, rollout_id, completed_optimizer_steps=None):
+        if completed_optimizer_steps is not None and (
+            type(completed_optimizer_steps) is not int or completed_optimizer_steps < 0
+        ):
+            raise ValueError("completed_optimizer_steps must be a nonnegative integer")
         if self.args.debug_train_only:
             # if debug train only, we don't generate evaluation data
             return
@@ -409,7 +413,11 @@ class RolloutManager:
             evaluation=True,
             args=self.args,
         )
-        log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
+        metrics = result.metrics
+        if completed_optimizer_steps is not None:
+            metrics = dict(metrics or {})
+            metrics["validation/completed_optimizer_steps"] = completed_optimizer_steps
+        log_eval_rollout_data(rollout_id, self.args, data, metrics)
 
     def save(self, rollout_id):
         # Keep admission frozen across source and builder snapshots. Source.save

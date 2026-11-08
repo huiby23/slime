@@ -8,6 +8,7 @@ from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.utils.cleanup import Cleanup
+from slime.utils.npu_compat import ray_accelerator_options, ray_device_ids, ray_resource_name
 
 from .actor_group import RayTrainGroup
 from .utils import add_default_ray_env_vars
@@ -15,10 +16,10 @@ from .utils import add_default_ray_env_vars
 logger = logging.getLogger(__name__)
 
 
-@ray.remote(num_gpus=1)
+@ray.remote
 class InfoActor:
     def get_ip_and_gpu_id(self):
-        return ray.util.get_node_ip_address(), ray.get_gpu_ids()[0]
+        return ray.util.get_node_ip_address(), ray_device_ids()[0]
 
 
 def sort_key(x):
@@ -47,7 +48,8 @@ def _create_placement_group(num_gpus):
     if num_gpus == 0:
         return None, [], []
 
-    bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_gpus)]
+    resource_name = ray_resource_name()
+    bundles = [{resource_name: 1, "CPU": 1} for _ in range(num_gpus)]
     pg = placement_group(bundles, strategy="PACK")
     num_bundles = len(bundles)
 
@@ -62,8 +64,8 @@ def _create_placement_group(num_gpus):
     log_interval = 30
     while not ray.wait([ready_ref], timeout=log_interval)[0]:
         elapsed += log_interval
-        total = ray.cluster_resources().get("GPU", 0)
-        available = ray.available_resources().get("GPU", 0)
+        total = ray.cluster_resources().get(resource_name, 0)
+        available = ray.available_resources().get(resource_name, 0)
         logger.info(
             f"Waiting for placement group of {num_gpus} GPUs (elapsed {elapsed}s): "
             f"{total:g} GPUs registered with Ray, {available:g} available."
@@ -74,6 +76,7 @@ def _create_placement_group(num_gpus):
     for i in range(num_bundles):
         info_actors.append(
             InfoActor.options(
+                **ray_accelerator_options(1),
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=pg,
                     placement_group_bundle_index=i,

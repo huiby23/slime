@@ -161,3 +161,135 @@ def save_debug_rollout_data(
         sample.pop("_queue_original_input", None)
     dump_data = {"rollout_id": rollout_id, "samples": samples}
     torch.save(materialize_tensor_refs(dump_data), path)
+
+
+def save_pre_abort_rollout_backup(directory, groups, *, rollout_id: int, args) -> None:
+    """Persist accepted CPU samples before network abort/drain can fail.
+
+    This is a data archive only. It does not enable trainer recovery, aggregate
+    optimizer state, or change any Sample fields, reward, token, or log-prob.
+    """
+    import json
+    import os
+    from datetime import datetime, timezone
+
+    samples = list(groups)
+    while samples and isinstance(samples[0], list):
+        samples = [sample for group in samples for sample in group]
+    if not samples or not all(hasattr(sample, "to_dict") for sample in samples):
+        raise ValueError("Pre-abort backup requires accepted in-memory Sample groups")
+    target = Path(directory) / f"rollout_{rollout_id}.pt"
+    temporary = target.with_suffix(".pt.partial")
+    save_debug_rollout_data(str(temporary), samples, rollout_id=rollout_id, evaluation=False, args=args)
+    os.replace(temporary, target)
+    metadata = {
+        "stage": "accepted-before-abort", "rollout_id": rollout_id,
+        "groups": len(groups), "samples": len(samples),
+        "schema": "slime-debug-rollout", "optimizer_checkpoint": False,
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "path": str(target),
+    }
+    target.with_suffix(".json").write_text(json.dumps(metadata, indent=2) + "\n")
+
+
+def save_incremental_accepted_rollout_backup(directory, groups, *, rollout_id: int, args) -> None:
+    """Atomically retain accepted CPU groups; never advertise a complete rollout.
+
+    The .pt carries its own counts/stage so it remains self-describing if a
+    process dies between the two file renames. The complete pre-abort archive
+    uses a different filename and remains unchanged.
+    """
+    import json
+    import os
+    from datetime import datetime, timezone
+
+    if getattr(args, "rollout_data_transport", None) != "object-store":
+        raise ValueError("Incremental accepted backup requires object-store CPU Sample groups")
+    if not groups or len(groups) > args.rollout_batch_size:
+        raise ValueError("Incremental accepted backup has an invalid accepted-group count")
+    if any(not isinstance(group, list) or len(group) != args.n_samples_per_prompt for group in groups):
+        raise ValueError("Incremental accepted backup requires complete prompt groups")
+    samples = [sample for group in groups for sample in group]
+    if not all(hasattr(sample, "to_dict") for sample in samples):
+        raise ValueError("Incremental accepted backup requires in-memory Samples")
+    sample_dicts = [sample.to_dict() for sample in samples]
+    visited = set()
+
+    def require_cpu(value):
+        if isinstance(value, torch.Tensor):
+            if value.device.type != "cpu":
+                raise ValueError("Incremental accepted backup refuses non-CPU tensors")
+            return
+        if isinstance(value, TensorRef):
+            raise ValueError("Incremental accepted backup refuses deferred tensor references")
+        identity = id(value)
+        if identity in visited:
+            return
+        visited.add(identity)
+        if isinstance(value, dict):
+            for key, item in value.items():
+                require_cpu(key)
+                require_cpu(item)
+        elif isinstance(value, (list, tuple, set)):
+            for item in value:
+                require_cpu(item)
+        elif isinstance(value, np.ndarray) and value.dtype.hasobject:
+            for item in value.flat:
+                require_cpu(item)
+        elif hasattr(value, "__dict__"):
+            require_cpu(vars(value))
+
+    require_cpu(sample_dicts)
+    target = Path(directory) / f"rollout_{rollout_id}.partial.pt"
+    sidecar = target.with_suffix(".json")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + ".tmp")
+    metadata_temporary = sidecar.with_name(sidecar.name + ".tmp")
+    previous = target.with_name(target.name + ".previous")
+    metadata = {
+        "stage": "accepted-incremental-partial", "complete": False,
+        "rollout_id": rollout_id, "groups": len(groups), "samples": len(samples),
+        "target_groups": args.rollout_batch_size,
+        "target_samples": args.rollout_batch_size * args.n_samples_per_prompt,
+        "schema": "slime-debug-rollout", "optimizer_checkpoint": False,
+        "source_cursor_included": False, "cpu_only": True,
+        "created_utc": datetime.now(timezone.utc).isoformat(), "path": str(target),
+    }
+    payload = {"rollout_id": rollout_id, "samples": sample_dicts, "backup_metadata": metadata}
+    replaced_payload = False
+    had_previous = target.exists()
+    try:
+        # Finish both writes before touching either prior committed filename.
+        with temporary.open("wb") as file:
+            torch.save(payload, file)
+            file.flush()
+            os.fsync(file.fileno())
+        with metadata_temporary.open("w") as file:
+            json.dump(metadata, file, indent=2)
+            file.write("\n")
+            file.flush()
+            os.fsync(file.fileno())
+        previous.unlink(missing_ok=True)
+        if had_previous:
+            os.link(target, previous)
+        os.replace(temporary, target)
+        replaced_payload = True
+        os.replace(metadata_temporary, sidecar)
+    except Exception as error:
+        if replaced_payload:
+            # Roll back a failed sidecar commit without copying any sample data.
+            if had_previous:
+                os.replace(previous, target)
+            else:
+                target.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"Incremental accepted backup failed for rollout={rollout_id}, "
+            f"groups={len(groups)}, samples={len(samples)}, path={target}; "
+            "previous committed partial was preserved"
+        ) from error
+    finally:
+        for path in (temporary, metadata_temporary, previous):
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not clean incremental backup temporary %s", path)
