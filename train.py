@@ -10,7 +10,7 @@ from slime.utils.cleanup import Cleanup
 from slime.utils.misc import should_run_periodic_action
 
 
-def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
+def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan, *, eval_restored_rollout=None):
     release_train = args.release_train
 
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
@@ -29,6 +29,10 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
 
     if args.offload_rollout:
         ray.get(rollout_manager.onload_kv.remote())
+
+    if eval_restored_rollout is not None:
+        # Recovery after a synchronous save interrupted before the scheduled evaluation.
+        ray.get(rollout_manager.eval.remote(rollout_id=eval_restored_rollout))
 
     # special case for eval-only
     if args.num_rollout == 0 and args.eval_interval is not None:
@@ -99,7 +103,7 @@ def train(args, pgs, rollout_manager, num_rollout_per_epoch, restore_plan):
             ray.get(rollout_manager.eval.remote(rollout_id))
 
 
-def main(args, restore_plan):
+def main(args, restore_plan, *, eval_restored_rollout=None):
     """Own the attempt's exit policy; actors only clean up their own resources."""
     with Cleanup() as cleanup:
         init_tracking(args)
@@ -108,7 +112,12 @@ def main(args, restore_plan):
             # Create or reattach rollout resources, then run this training attempt.
             startup = create_rollout_manager(args, restore_plan=restore_plan)
             train(
-                startup.args, startup.placements, startup.manager, startup.num_rollout_per_epoch, startup.restore_plan
+                startup.args,
+                startup.placements,
+                startup.manager,
+                startup.num_rollout_per_epoch,
+                startup.restore_plan,
+                eval_restored_rollout=eval_restored_rollout,
             )
         except BaseException:
             # Failures and interruptions retain serving and replay data for a manual

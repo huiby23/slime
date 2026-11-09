@@ -6,6 +6,8 @@
 
 ## 从哪里开始
 
+- [8×A100 上的 Qwen3-4B MATH NVFP4 C4V16 实验](examples/nvfp4_fa_math/README.md)，包含 MATH-500 评测、Adam 恢复和权重验收。
+
 - [4B 实验指南](examples/w4a8_sim/QWEN3_4B.md)：精度范围、训练设置、结果和 checkpoint 保存恢复。
 - [脚本索引](examples/w4a8_sim/README.md)：准备、验证、训练、监控各入口的用途。
 - [正式配置与结果索引](examples/w4a8_sim/experiments/qwen3_4b_20261030.json)：

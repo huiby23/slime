@@ -2181,10 +2181,10 @@ def slime_validate_args(args):
     if args.over_sampling_batch_size is None:
         args.over_sampling_batch_size = args.rollout_batch_size
 
-    assert args.over_sampling_batch_size >= args.rollout_batch_size, (
-        f"over_sampling_batch_size {args.over_sampling_batch_size} should be greater than or equal to "
-        f"rollout_batch_size {args.rollout_batch_size}"
-    )
+    # The synchronous collector submits groups until its target is in flight.
+    # Smaller positive fetches replenish rejected groups without overshooting.
+    if args.over_sampling_batch_size < 1:
+        raise ValueError("over_sampling_batch_size must be positive")
 
     if args.num_epoch is not None:
         if args.num_rollout is not None:
